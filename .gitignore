@@ -1,0 +1,24 @@
+node_modules
+# Build artifacts are generated locally and in CI, but must never be committed.
+dist
+build
+.turbo
+.cache
+.output
+.vite
+.DS_Store
+.env
+.env.*
+.env.local
+!.env.example
+.claude
+coverage
+*.tsbuildinfo
+*.log
+*.pid
+*.session
+*.meta
+*.logpath
+*.current-log
+*.latest.log
+.run/
