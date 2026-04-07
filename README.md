@@ -168,6 +168,14 @@ pnpm --filter @coding-claw/bridge start
 ```
 
 > `pnpm start` 依赖已生成的 `dist`，因此启动前必须先执行 `pnpm build`。
+>
+> Windows 用户更建议使用仓库脚本：
+>
+> ```powershell
+> powershell -ExecutionPolicy Bypass -File .\scripts\windows\start-bridge.ps1 -Prod
+> powershell -ExecutionPolicy Bypass -File .\scripts\windows\logs-bridge.ps1 -Wait
+> powershell -ExecutionPolicy Bypass -File .\scripts\windows\stop-bridge.ps1
+> ```
 
 ## 常用命令
 

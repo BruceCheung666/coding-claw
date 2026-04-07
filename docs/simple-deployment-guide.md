@@ -49,7 +49,7 @@ pnpm build
 
 ## 4. 环境变量与模板
 
-当前版本**不要假设会自动加载 `.env`**。最稳妥的方式仍然是显式 `export` 后启动，或者自己在启动脚本里先加载 `.env`。
+当前版本**不要假设会自动加载 `.env`**。如果你使用下面提供的 Windows 脚本，脚本会读取仓库根目录下的 `.env`；如果你手工启动，则仍然建议先显式 `export` 后再执行。
 
 仓库提供两套模板：
 
@@ -102,6 +102,23 @@ export ANTHROPIC_BASE_URL=http://127.0.0.1:15721
 export ANTHROPIC_AUTH_TOKEN=<your-token>
 ```
 
+### 4.5 Windows 脚本约定
+
+仓库新增了 3 个 Windows 脚本：
+
+- `scripts/windows/start-bridge.ps1`
+- `scripts/windows/stop-bridge.ps1`
+- `scripts/windows/logs-bridge.ps1`
+
+约定：
+
+- 启动脚本默认读取仓库根目录 `.env`
+- 运行时文件写入：
+  - PID：`.runtime/bridge.pid`
+  - stdout：`.runtime/logs/bridge.log`
+  - stderr：`.runtime/logs/bridge.err.log`
+- 如果 PID 文件存在且对应进程仍在运行，启动脚本会拒绝重复启动
+
 ## 5. 飞书侧配置
 
 ### 5.1 订阅方式
@@ -127,7 +144,39 @@ export ANTHROPIC_AUTH_TOKEN=<your-token>
 
 ## 6. 启动方式
 
-### 6.1 开发态启动
+### 6.1 推荐：Windows 脚本启动
+
+开发态启动：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\windows\start-bridge.ps1
+```
+
+构建态启动：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\windows\start-bridge.ps1 -Prod
+```
+
+停止当前实例：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\windows\stop-bridge.ps1
+```
+
+查看 stdout 日志：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\windows\logs-bridge.ps1 -Wait
+```
+
+查看 stderr 日志：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\windows\logs-bridge.ps1 -ErrorLog -Wait
+```
+
+### 6.2 备用：开发态手工启动
 
 ```bash
 export FEISHU_APP_ID=<your-app-id>
@@ -135,14 +184,13 @@ export FEISHU_APP_SECRET=<your-app-secret>
 export CODING_CLAW_WORKSPACE_ROOT=D:/coding-claw-workspaces
 export CODING_CLAW_CLAUDE_PATH=C:/Users/your-user/.local/bin/claude.exe
 export CLAUDE_CODE_GIT_BASH_PATH=D:\DEVELOP\Git\usr\bin\bash.exe
-export CLAUDE_MODEL=claude-sonnet-4-6
 export CODING_CLAW_ENABLE_AGENT_TEAMS=1
 export CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1
 cd D:/Projects/coding-claw/apps/bridge
 node --import tsx ./src/main.ts
 ```
 
-### 6.2 构建态启动
+### 6.3 备用：构建态手工启动
 
 ```bash
 cd D:/Projects/coding-claw
@@ -158,14 +206,20 @@ node ./dist/main.js
 
 ## 7. 启动成功的判断方式
 
-控制台至少应看到：
+如果通过脚本后台启动，先查看日志：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\windows\logs-bridge.ps1 -Wait
+```
+
+控制台或日志中至少应看到：
 
 ```text
 [coding-claw] Feishu bridge started
 [ws] ws client ready
 ```
 
-如果已有旧实例，建议先停掉旧 bridge 再重启，避免多个实例同时占用飞书长连接。
+如果已有旧实例，建议先执行停止脚本，再重启，避免多个实例同时占用飞书长连接。
 
 ## 8. 部署后最小验收
 
@@ -234,7 +288,19 @@ node ./dist/main.js
 3. `[runtime] llm query input`
 4. `[runtime] turn error` 或 `[runtime] llm output message`
 
-### 9.3 Claude CLI 在 Windows 上退出
+### 9.3 `.env` 写了，但重启后还是不生效
+
+如果你使用的是 Windows 启动脚本，脚本默认读取仓库根目录 `.env`。
+
+如果仍然不生效，优先检查：
+
+- `.env` 文件是否在仓库根目录
+- 变量名是否拼写正确
+- 是否先运行了旧实例，再忘记重启
+
+如果你不是走脚本方式启动，则当前版本仍然不要假设会自动加载 `.env`。
+
+### 9.4 Claude CLI 在 Windows 上退出
 
 优先检查：
 
@@ -278,6 +344,23 @@ D:\Projects\CommonProject
 
 - 优先用文本命令 `/reset D:\Projects\...`
 - 不要把“卡片手输路径问题”和“runtime 拉不起”混在一起判断
+
+### 9.7 启动 / 停止 / 日志脚本常见问题
+
+如果脚本启动后立即退出，优先检查：
+
+- `.env` 是否存在
+- `CLAUDE_CODE_GIT_BASH_PATH` 是否真实存在
+- `.runtime/bridge.pid` 是否残留旧 PID
+- stderr 日志里是否有环境变量缺失或 Claude CLI 报错
+
+常用排查命令：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\windows\logs-bridge.ps1 -Wait
+powershell -ExecutionPolicy Bypass -File .\scripts\windows\logs-bridge.ps1 -ErrorLog -Wait
+powershell -ExecutionPolicy Bypass -File .\scripts\windows\stop-bridge.ps1
+```
 
 ## 10. 推荐排障顺序
 
