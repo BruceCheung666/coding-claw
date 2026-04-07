@@ -127,13 +127,16 @@ FEISHU_APP_SECRET=your_feishu_app_secret
 CODING_CLAW_WORKSPACE_ROOT=/absolute/path/to/workspaces
 
 # 可选：指定 Claude 模型
-CLAUDE_MODEL=claude-sonnet-4-5
+CLAUDE_MODEL=claude-sonnet-4-6
 
 # 可选：桥接默认语言，默认 zh-CN
 CODING_CLAW_LANGUAGE=zh-CN
 
 # 可选：指定 Claude Code 可执行文件路径
 CODING_CLAW_CLAUDE_PATH=/absolute/path/to/claude
+
+# Windows 下建议显式指定 Git Bash 路径
+CLAUDE_CODE_GIT_BASH_PATH=C:\\Path\\To\\Git\\usr\\bin\\bash.exe
 
 # 可选：指定 shell，未配置时回退到 /bin/sh
 CODING_CLAW_SHELL=/bin/bash
@@ -143,6 +146,11 @@ CODING_CLAW_ENABLE_AGENT_TEAMS=1
 ```
 
 > 注意：不要把密钥、token 或其他凭据硬编码进源码，也不要提交到仓库。
+>
+> Windows 部署、双 env 模板与排障流程见：
+> - `docs/simple-deployment-guide.md`
+> - `docs/deployment/env.official.example`
+> - `docs/deployment/env.proxy.example`
 
 ### 3. 启动开发环境
 

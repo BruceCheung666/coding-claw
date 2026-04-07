@@ -1,3 +1,4 @@
+import { dirname, join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
   BridgeOrchestrator,
@@ -297,7 +298,7 @@ describe('BridgeOrchestrator control commands', () => {
       runtime: 'claude',
       channel: 'feishu',
       mode: 'default',
-      model: 'claude-sonnet-4',
+      model: 'claude-sonnet-4-6',
       metadata: {}
     });
 
@@ -322,7 +323,7 @@ describe('BridgeOrchestrator control commands', () => {
     if (result.kind === 'control') {
       expect(result.response.format).toBe('agent-model-picker');
       if (result.response.format === 'agent-model-picker') {
-        expect(result.response.currentModel).toBe('claude-sonnet-4');
+        expect(result.response.currentModel).toBe('claude-sonnet-4-6');
         expect(result.response.options.map((option) => option.model)).toEqual([
           'default',
           'best',
@@ -333,6 +334,11 @@ describe('BridgeOrchestrator control commands', () => {
           'opus[1m]',
           'opusplan'
         ]);
+        expect(result.response.options.find((option) => option.model === 'sonnet')?.description).toContain('claude-sonnet-4-6');
+        expect(result.response.options.find((option) => option.model === 'opus')?.description).toContain('claude-opus-4-6');
+        expect(result.response.options.find((option) => option.model === 'haiku')?.description).toContain('claude-haiku-4-5-20251001');
+        expect(result.response.options.find((option) => option.model === 'sonnet[1m]')?.description).toContain('claude-sonnet-4-6');
+        expect(result.response.options.find((option) => option.model === 'opus[1m]')?.description).toContain('claude-opus-4-6');
       }
     }
   });
@@ -404,7 +410,7 @@ describe('BridgeOrchestrator control commands', () => {
       channel: 'feishu',
       sessionId: 'session-old',
       mode: 'default',
-      model: 'claude-sonnet-4',
+      model: 'claude-sonnet-4-6',
       metadata: {}
     });
     await controls.upsert({
@@ -430,16 +436,16 @@ describe('BridgeOrchestrator control commands', () => {
       channel: 'feishu',
       chatId: 'chat-switch',
       messageId: 'msg-switch',
-      text: '/agent model claude-opus-4.1'
+      text: '/agent model claude-opus-4-6'
     });
 
     expect(result.kind).toBe('control');
     expect(runtime.dropCalls).toEqual(['chat-switch']);
-    expect((await bindings.get('chat-switch'))?.model).toBe('claude-opus-4.1');
+    expect((await bindings.get('chat-switch'))?.model).toBe('claude-opus-4-6');
     expect((await bindings.get('chat-switch'))?.sessionId).toBeUndefined();
     if (result.kind === 'control') {
       expect(result.response.text).toContain('Agent 模型已切换');
-      expect(result.response.text).toContain('model: claude-opus-4.1');
+      expect(result.response.text).toContain('model: claude-opus-4-6');
       expect(result.response.text).toContain('source: chat-binding');
       expect(result.response.text).toContain('session: reset');
     }
@@ -461,7 +467,7 @@ describe('BridgeOrchestrator control commands', () => {
       channel: 'feishu',
       sessionId: 'session-old',
       mode: 'default',
-      model: 'claude-opus-4.1',
+      model: 'claude-opus-4-6',
       metadata: {}
     });
     await controls.upsert({
@@ -745,8 +751,16 @@ describe('BridgeOrchestrator control commands', () => {
 
 describe('LocalShellExecutor', () => {
   it('persists shell environment across commands and resets cleanly', async () => {
+    const shellPath = process.env.SHELL || process.env.COMSPEC;
+    if (!shellPath) {
+      throw new Error('No test shell available in current environment.');
+    }
+
+    const resolvedShellPath = shellPath.toLowerCase().endsWith('bash')
+      ? join(dirname(shellPath), 'bash.exe')
+      : shellPath;
     const executor = new LocalShellExecutor({
-      shellPath: '/bin/sh'
+      shellPath: resolvedShellPath
     });
     const chatId = 'chat-local-shell';
     const workspacePath = '/tmp';

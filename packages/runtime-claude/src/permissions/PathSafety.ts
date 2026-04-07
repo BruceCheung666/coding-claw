@@ -1,4 +1,4 @@
-import { basename, resolve } from 'node:path';
+import { basename, relative, resolve, sep } from 'node:path';
 import type { PermissionReason, PermissionReasonKind } from '@coding-claw/core';
 
 const SENSITIVE_PATTERNS = [
@@ -63,19 +63,12 @@ export function isWithinWorkspaceOrAllowedDirectories(
 ): boolean {
   const resolvedTarget = resolve(targetPath);
   const resolvedCwd = resolve(cwd);
-  if (
-    resolvedTarget === resolvedCwd ||
-    resolvedTarget.startsWith(`${resolvedCwd}/`)
-  ) {
+  if (isSameOrWithinDirectory(resolvedTarget, resolvedCwd)) {
     return true;
   }
 
   for (const directory of allowedDirectories) {
-    const resolvedDirectory = resolve(directory);
-    if (
-      resolvedTarget === resolvedDirectory ||
-      resolvedTarget.startsWith(`${resolvedDirectory}/`)
-    ) {
+    if (isSameOrWithinDirectory(resolvedTarget, resolve(directory))) {
       return true;
     }
   }
@@ -144,12 +137,13 @@ export function evaluateFilePathAccess(
 
 function isSensitivePath(filePath: string): boolean {
   const normalized = resolve(filePath);
+  const normalizedSlashes = normalizePathSeparators(normalized);
 
-  if (SENSITIVE_PATTERNS.some((pattern) => normalized.includes(pattern))) {
+  if (SENSITIVE_PATTERNS.some((pattern) => normalizedSlashes.includes(pattern))) {
     return true;
   }
 
-  if (SENSITIVE_SUFFIXES.some((suffix) => normalized.endsWith(suffix))) {
+  if (SENSITIVE_SUFFIXES.some((suffix) => normalizedSlashes.endsWith(suffix))) {
     return true;
   }
 
@@ -158,11 +152,32 @@ function isSensitivePath(filePath: string): boolean {
     return true;
   }
 
-  return normalized.split('/').some((part) => PROTECTED_DIRECTORIES.has(part));
+  return normalized
+    .split(sep)
+    .some((part) => PROTECTED_DIRECTORIES.has(part));
 }
 
 function isBlockedDevicePath(filePath: string): boolean {
   return /^\/dev\/(?!null$)/.test(filePath);
+}
+
+function isSameOrWithinDirectory(targetPath: string, directoryPath: string): boolean {
+  if (targetPath === directoryPath) {
+    return true;
+  }
+
+  // Use path.relative() instead of raw string prefixes so Windows drive letters
+  // and separators behave the same as Unix-style workspace checks.
+  const relativePath = relative(directoryPath, targetPath);
+  return (
+    relativePath !== '' &&
+    !relativePath.startsWith('..') &&
+    !relativePath.includes(`..${sep}`)
+  );
+}
+
+function normalizePathSeparators(filePath: string): string {
+  return filePath.replace(/\\/g, '/');
 }
 
 function containsUncPath(filePath: string): boolean {

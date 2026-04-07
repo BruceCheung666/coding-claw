@@ -301,6 +301,9 @@ function shellEscape(value: string): string {
 }
 
 function resolveShellPath(configuredShellPath?: string): string {
+  // This executor emits POSIX shell snippets. Windows deployments must point
+  // CODING_CLAW_SHELL to a compatible shell (for example Git Bash) instead of
+  // relying on native PowerShell/cmd semantics.
   return configuredShellPath || '/bin/sh';
 }
 

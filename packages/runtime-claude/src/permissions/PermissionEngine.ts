@@ -375,7 +375,7 @@ export class PermissionEngine {
       ) {
         suggestions.push({
           type: 'addDirectories',
-          directories: [dirname(resolvedPath)],
+          directories: [normalizeSuggestionPath(dirname(resolvedPath))],
           destination: 'session'
         });
       }
@@ -471,11 +471,7 @@ export class PermissionEngine {
     ) {
       const resolvedPath = resolve(filePath);
       for (const directory of this.allowedDirectories) {
-        const resolvedDirectory = resolve(directory);
-        if (
-          resolvedPath === resolvedDirectory ||
-          resolvedPath.startsWith(`${resolvedDirectory}/`)
-        ) {
+        if (isWithinWorkspaceOrAllowedDirectories(resolvedPath, directory, new Set())) {
           return true;
         }
       }
@@ -589,6 +585,10 @@ function isPlanFile(filePath: string): boolean {
 function buildExactBashRule(command: string): string | undefined {
   const trimmed = command.trim();
   return trimmed ? `Bash(${trimmed})` : undefined;
+}
+
+function normalizeSuggestionPath(path: string): string {
+  return path.replace(/\\/g, '/');
 }
 
 function suggestionMatchesScopeKey(
