@@ -1,6 +1,9 @@
 import { inspect } from 'node:util';
 
+/* eslint-disable no-console -- centralized log sink for bridge/runtime/channel modules */
+
 const REDACTED = '[REDACTED]';
+
 const SENSITIVE_KEY_PATTERN =
   /(^|_|-)(secret|token|authorization|cookie|credential|passwd|password)(_|-|$)|^authorization$/i;
 

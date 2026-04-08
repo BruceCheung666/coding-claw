@@ -1,4 +1,5 @@
 import { mkdirSync } from 'node:fs';
+import { errorToLogObject, logDebug } from '@coding-claw/core';
 import {
   BridgeOrchestrator,
   InMemoryApprovalStore,
@@ -97,10 +98,10 @@ async function main(): Promise<void> {
   const adapter = new FeishuChannelAdapter(config.feishu, orchestrator);
   await adapter.start();
 
-  console.log('[coding-claw] Feishu bridge started');
+  logDebug('[coding-claw] Feishu bridge started');
 }
 
 void main().catch((error) => {
-  console.error('[coding-claw] fatal error', error);
+  logDebug('[coding-claw] fatal error', errorToLogObject(error));
   process.exitCode = 1;
 });

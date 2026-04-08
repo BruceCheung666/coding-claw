@@ -104,3 +104,7 @@ pnpm verify:repo-hygiene
 - 运行依赖飞书和 Claude 相关环境变量，禁止将密钥硬编码进源码。
 - 工作区目录由 `CODING_CLAW_WORKSPACE_ROOT` 控制，本地默认使用 `${HOME}/.feishu-claude`。
 - 如果 Claude 运行时启动失败，优先检查 `CODING_CLAW_CLAUDE_PATH` 是否指向正确的 Claude Code 原生可执行文件。
+
+## 日志位置
+
+- 默认日志存放位置在 ~/.coding-claw/logs

@@ -2,6 +2,8 @@
 
 本文件用于记录每个“大开发节点”的阶段性产出、已知偏差和下一阶段待办。
 
+说明：本文件按时间顺序保留历史阶段记录。各阶段中的“当前已知问题”和“下一阶段待办”只代表当时状态；若与后续阶段记录或 `docs/project-constraints.md` 的当前约束冲突，以较新的阶段记录和约束文档为准。
+
 ## 维护规则
 
 - 每完成一个可独立回顾的大节点，都在本文件追加一个新阶段。
@@ -64,7 +66,7 @@
 ### 当前已知问题
 
 - 工作区绑定、sessionId、已处理 messageId 仍然是内存态，服务重启后无法保留。
-- “相同 prompt 不同 message_id”目前只记录日志，不做启发式拦截；是否拦截需要基于更可靠的会话/事件模型再设计。
+- “相同 prompt 不同 message_id”目前只记录日志，不做启发式拦截；重复消息治理以持久化 `message_id` 去重为准。
 - `ExitPlanMode` 的根因还没有彻底消除，目前是通过 no-op 降噪，而不是从工具暴露或提示词层根治。
 - 飞书卡片交互已经基本可用，但卡片回调和消息更新流程仍需更多端到端覆盖。
 
@@ -72,7 +74,6 @@
 
 - 将 `message_id` 去重和 workspace/session 绑定升级为可恢复持久化。
 - 深挖为什么模型会在非 plan mode 下调用 `ExitPlanMode`，优先从工具暴露和提示词上下文排查。
-- 增加“同一会话重复开启新 turn”的保护策略，避免刚完成又被相同输入重新触发。
 - 继续完善日志落盘，让用户可以直接查看 bridge 运行日志文件。
 
 ## Phase 03: Control Command Redesign
@@ -260,7 +261,7 @@
 - 若 init 缺失 Team 工具，考虑在首轮内增加更强的自动降级策略，避免模型重复尝试 `team_name`。
 - 进一步研究 Claude Code 的 dynamic system prompt section，补齐按真实 tool pool 生成的条件性 guidance。
 
-## Phase 09: Repository Hygiene Guardrails
+## Phase 07: Repository Hygiene Guardrails
 
 ### 完成内容
 
@@ -284,6 +285,8 @@
 - 评估 `pnpm dev` 是否也应显式文档化其对本地构建状态的要求，或后续优化为更直接的源码开发链路。
 - 如后续引入发布流程，补充 release 前校验，确保发布构建与仓库卫生规则保持一致。
 
+## Phase 08: CI Baseline And Quality Gates
+
 ### 完成内容
 
 - 新增 GitHub Actions 基础 CI workflow，覆盖 `pull_request` 与主分支 `push`。
@@ -306,6 +309,8 @@
 - 继续补齐 ESLint / Prettier，并纳入 CI。
 - 视需要拆分更细的 job（如 verify / build / release-precheck），减少重复执行时间。
 - 在 GitHub 仓库设置中启用分支保护，将 CI 设为必过检查。
+
+## Phase 09: IM Permission Relaxation
 
 ### 完成内容
 
@@ -346,7 +351,7 @@
 - 为权限请求增加聚合策略，降低复杂任务下的多张高风险审批卡片。
 - 评估是否需要显式引入“Claude strict / IM relaxed”可配置策略层，便于未来支持多 runtime、多产品形态。
 
-## Phase 08: Turn Queue Recovery Hardening
+## Phase 10: Turn Queue Recovery Hardening
 
 ### 完成内容
 
@@ -380,7 +385,7 @@
 - 继续清理协议文档与实现漂移，特别是未真正落地的事件类型和恢复语义说明。
 - 继续校准飞书问答卡片在更多真实 payload 下的表现，特别是多选 + 其他补充内容的边界情况。
 
-## Phase 09: Unified Reset Workspace Picker
+## Phase 11: Unified Reset Workspace Picker
 
 ### 完成内容
 

@@ -4,11 +4,7 @@
 
 本文档用于在 Windows 环境部署 `coding-claw`，完成最小验收，并在出现问题时按固定顺序排障。
 
-当前项目定位：
-
-- 主链路：`Feishu Channel -> Bridge Core -> Claude Runtime`
-- 当前更适合：本机自用、联调、内部演示
-- 不适合直接视为“完全等同原生 Claude Code CLI 的产品化机器人”
+当前项目定位以 `README.md` 的“当前状态”为准：项目仍处于“早期可用 / 持续对齐阶段”，更适合作为可研究、可演进的 bridge 内核，用于本机自用、联调和内部演示，而不是直接视为“完全等同原生 Claude Code CLI 的产品化机器人”。
 
 ## 2. 部署前先理解的最小背景
 
@@ -51,6 +47,8 @@ pnpm build
 
 当前版本**不要假设会自动加载 `.env`**。如果你使用下面提供的 Windows 脚本，脚本会读取仓库根目录下的 `.env`；如果你手工启动，则仍然建议先显式 `export` 后再执行。
 
+仓库根的 `.env.example` 提供跨平台最小变量基线；当前目录下的模板提供面向部署场景的完整示例。
+
 仓库提供两套模板：
 
 - 官方 / 直连模板：`docs/deployment/env.official.example`
@@ -67,6 +65,8 @@ export CLAUDE_CODE_GIT_BASH_PATH=D:\DEVELOP\Git\usr\bin\bash.exe
 ```
 
 ### 4.2 推荐项
+
+如需启用 Agent Teams，优先设置 `CODING_CLAW_ENABLE_AGENT_TEAMS=1`。若需要与上游 Claude Code feature gate 显式保持一致，或用于排查 Team 工具缺失问题，再同时设置 `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1`。
 
 ```bash
 export CLAUDE_MODEL=claude-sonnet-4-6
@@ -308,7 +308,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\windows\logs-bridge.ps1 -Wait
 - `CLAUDE_CODE_GIT_BASH_PATH` 是否指向真实存在的 Git Bash
 - `CLAUDE_CODE_GIT_BASH_PATH` 是否使用 Windows 路径格式
 
-### 9.4 卡片一直停在“任务已开始，正在整理上下文…”
+### 9.5 卡片一直停在“任务已开始，正在整理上下文…”
 
 先不要直接判断为 bridge 卡死。
 

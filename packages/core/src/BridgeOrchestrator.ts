@@ -19,6 +19,7 @@ import {
   reduceRenderModel
 } from './render/reduceRenderModel.js';
 import { isCrossPlatformAbsolutePath } from './pathUtils.js';
+import { errorToLogObject, logDebug, logError, logWarn } from './logging.js';
 import type {
   AgentModelControlOption,
   AgentModeControlOption,
@@ -143,7 +144,7 @@ export class BridgeOrchestrator {
     message: InboundChatMessage,
     surface: RenderSurface
   ): Promise<void> {
-    console.log('[bridge] enqueue inbound turn', {
+    logDebug('[bridge] enqueue inbound turn', {
       chatId: message.chatId,
       messageId: message.messageId,
       textPreview: message.text.slice(0, 120)
@@ -173,7 +174,7 @@ export class BridgeOrchestrator {
 
     const session = this.sessions.get(chatId);
     if (!session) {
-      console.warn(
+      logWarn(
         '[bridge] interaction resolved without an active runtime session',
         {
           chatId,
@@ -219,7 +220,7 @@ export class BridgeOrchestrator {
     const session = await this.getOrCreateSession(binding);
     const turnId = randomUUID();
     let model = createInitialRenderModel(turnId, message.text);
-    console.log('[bridge] start turn', {
+    logDebug('[bridge] start turn', {
       chatId: message.chatId,
       messageId: message.messageId,
       turnId,
@@ -265,7 +266,7 @@ export class BridgeOrchestrator {
       }
 
       await surface.complete(turnId);
-      console.log('[bridge] complete turn', {
+      logDebug('[bridge] complete turn', {
         chatId: message.chatId,
         messageId: message.messageId,
         turnId,
@@ -276,11 +277,11 @@ export class BridgeOrchestrator {
         turnId,
         error instanceof Error ? error.message : String(error)
       );
-      console.error('[bridge] turn failed', {
+      logError('[bridge] turn failed', {
         chatId: message.chatId,
         messageId: message.messageId,
         turnId,
-        error: error instanceof Error ? error.message : String(error)
+        error: errorToLogObject(error)
       });
       throw error;
     }

@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { dirname, join, resolve } from 'node:path';
 import { homedir } from 'node:os';
+import { logDebug, logWarn } from '@coding-claw/core';
 import type {
   InteractionResolution,
   PendingInteraction,
@@ -88,13 +89,13 @@ export class PermissionEngine {
   resolve(interactionId: string, resolution: InteractionResolution): void {
     const resolver = this.pending.get(interactionId);
     if (!resolver) {
-      console.warn('[permission] missing pending interaction', {
+      logWarn('[permission] missing pending interaction', {
         interactionId
       });
       return;
     }
     this.pending.delete(interactionId);
-    console.log('[permission] resolved interaction', {
+    logDebug('[permission] resolved interaction', {
       interactionId,
       kind: resolution.kind
     });
@@ -232,10 +233,7 @@ export class PermissionEngine {
         ];
       })
     );
-    console.log(
-      '[permission] ask-user-question answers ready',
-      answersByQuestion
-    );
+    logDebug('[permission] ask-user-question answers ready', answersByQuestion);
 
     return {
       behavior: 'allow',
@@ -250,7 +248,7 @@ export class PermissionEngine {
     toolInput: Record<string, unknown>
   ): Promise<PermissionDecision> {
     if (this.mode !== 'plan') {
-      console.warn('[permission] ExitPlanMode called while not in plan mode', {
+      logWarn('[permission] ExitPlanMode called while not in plan mode', {
         mode: this.mode,
         toolInput
       });

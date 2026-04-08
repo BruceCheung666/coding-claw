@@ -22,3 +22,4 @@ coverage
 *.current-log
 *.latest.log
 .run/
+.idea/

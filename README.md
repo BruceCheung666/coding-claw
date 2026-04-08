@@ -19,7 +19,7 @@
 
 ## 当前状态
 
-项目目前处于 **早期可用 / 持续对齐阶段**：
+项目目前处于 **早期可用 / 持续对齐阶段**：更适合作为可研究、可演进的 bridge 内核，用于本机自用、联调和内部演示，而不是直接视为“完全等同原生 Claude Code CLI 的产品化机器人”。
 
 ### 已覆盖能力
 
@@ -141,11 +141,18 @@ CLAUDE_CODE_GIT_BASH_PATH=C:\\Path\\To\\Git\\usr\\bin\\bash.exe
 # 可选：指定 shell，未配置时回退到 /bin/sh
 CODING_CLAW_SHELL=/bin/bash
 
-# 可选：启用 Agent Teams 能力
+# 可选：在 bridge 侧启用 Agent Teams 能力
 CODING_CLAW_ENABLE_AGENT_TEAMS=1
+
+# 可选：显式对齐 / 排查 Claude Code 上游 feature gate
+CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1
 ```
 
 > 注意：不要把密钥、token 或其他凭据硬编码进源码，也不要提交到仓库。
+>
+> `.env.example` 提供跨平台最小变量清单；`docs/deployment/env.official.example` 和 `docs/deployment/env.proxy.example` 提供面向部署场景的完整模板。
+>
+> 启用 Agent Teams 时，建议优先设置 `CODING_CLAW_ENABLE_AGENT_TEAMS=1`；如需显式对齐上游 Claude Code feature gate 或排查 Team 工具缺失问题，再同时设置 `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1`。开启开关只表示 bridge 会请求相关能力，底层是否真的返回 `TeamCreate` / `TeamDelete` / `SendMessage` 仍受上游 feature gate 控制。
 >
 > Windows 部署、双 env 模板与排障流程见：
 >

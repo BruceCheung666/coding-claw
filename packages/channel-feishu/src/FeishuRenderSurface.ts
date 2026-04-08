@@ -1,4 +1,4 @@
-import * as lark from '@larksuiteoapi/node-sdk';
+import type { Client } from '@larksuiteoapi/node-sdk';
 import type {
   AgentSummary,
   BridgeEvent,
@@ -13,6 +13,23 @@ import { buildInteractionCard } from './render/interactionCards.js';
 import { callFeishuApi } from './feishuLogging.js';
 import { CardStreamer } from './render/CardStreamer.js';
 
+interface FeishuMessageClient {
+  im: {
+    message: {
+      reply(
+        request: Record<string, unknown>
+      ): Promise<{ data?: { message_id?: string } }>;
+      create(
+        request: Record<string, unknown>
+      ): Promise<{ data?: { message_id?: string } }>;
+    };
+  };
+}
+
+function asFeishuMessageClient(client: Client): FeishuMessageClient {
+  return client as unknown as FeishuMessageClient;
+}
+
 export class FeishuRenderSurface implements RenderSurface {
   private streamer?: CardStreamer;
   private latestModel?: RenderModel;
@@ -20,7 +37,7 @@ export class FeishuRenderSurface implements RenderSurface {
   private skipRepostOnNextRender = false;
 
   constructor(
-    private readonly client: lark.Client,
+    private readonly client: Client,
     private readonly chatId: string,
     private readonly replyToMessageId?: string,
     private readonly onInteractionSent?: (
@@ -58,6 +75,7 @@ export class FeishuRenderSurface implements RenderSurface {
       return;
     }
 
+    const messageClient = asFeishuMessageClient(this.client);
     const response = this.streamer?.currentMessageId
       ? await callFeishuApi(
           'im.message.reply',
@@ -69,7 +87,7 @@ export class FeishuRenderSurface implements RenderSurface {
             }
           },
           async () =>
-            await (this.client as any).im.message.reply({
+            await messageClient.im.message.reply({
               path: { message_id: this.streamer!.currentMessageId },
               data: {
                 msg_type: 'interactive',
@@ -88,7 +106,7 @@ export class FeishuRenderSurface implements RenderSurface {
             }
           },
           async () =>
-            await (this.client as any).im.message.create({
+            await messageClient.im.message.create({
               params: { receive_id_type: 'chat_id' },
               data: {
                 receive_id: this.chatId,

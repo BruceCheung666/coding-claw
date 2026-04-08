@@ -1,8 +1,35 @@
-import * as lark from '@larksuiteoapi/node-sdk';
+import type { Client } from '@larksuiteoapi/node-sdk';
 import { callFeishuApi } from '../feishuLogging.js';
 
+interface FeishuCardkitClient {
+  cardkit: {
+    v1: {
+      card: {
+        update(request: Record<string, unknown>): Promise<void>;
+        create(
+          request: Record<string, unknown>
+        ): Promise<{ data?: { card_id?: string } }>;
+      };
+    };
+  };
+  im: {
+    message: {
+      reply(
+        request: Record<string, unknown>
+      ): Promise<{ data?: { message_id?: string } }>;
+      create(
+        request: Record<string, unknown>
+      ): Promise<{ data?: { message_id?: string } }>;
+    };
+  };
+}
+
+function asFeishuCardkitClient(client: Client): FeishuCardkitClient {
+  return client as unknown as FeishuCardkitClient;
+}
+
 export interface CardStreamerDeps {
-  client: lark.Client;
+  client: Client;
   chatId: string;
   replyToMessageId?: string;
 }
@@ -25,6 +52,7 @@ export class CardStreamer {
     options?: CardVisualOptions
   ): Promise<void> {
     const cardPayload = JSON.stringify(buildCard(markdown, loading, options));
+    const client = asFeishuCardkitClient(this.deps.client);
 
     if (!this.cardId) {
       await this.create(cardPayload);
@@ -50,8 +78,7 @@ export class CardStreamer {
     await callFeishuApi(
       'cardkit.v1.card.update',
       request,
-      async () =>
-        await (this.deps.client as any).cardkit.v1.card.update(request)
+      async () => await client.cardkit.v1.card.update(request)
     );
     this.lastCardPayload = cardPayload;
   }
@@ -61,6 +88,7 @@ export class CardStreamer {
   }
 
   private async create(cardPayload: string): Promise<void> {
+    const client = asFeishuCardkitClient(this.deps.client);
     const createCardRequest = {
       data: {
         type: 'card_json',
@@ -70,10 +98,7 @@ export class CardStreamer {
     const response = await callFeishuApi(
       'cardkit.v1.card.create',
       createCardRequest,
-      async () =>
-        await (this.deps.client as any).cardkit.v1.card.create(
-          createCardRequest
-        )
+      async () => await client.cardkit.v1.card.create(createCardRequest)
     );
 
     this.cardId = response?.data?.card_id;
@@ -93,8 +118,7 @@ export class CardStreamer {
       const replyResponse = await callFeishuApi(
         'im.message.reply',
         replyRequest,
-        async () =>
-          await (this.deps.client as any).im.message.reply(replyRequest)
+        async () => await client.im.message.reply(replyRequest)
       );
       this.messageId = replyResponse?.data?.message_id;
       return;
@@ -111,8 +135,7 @@ export class CardStreamer {
     const createResponse = await callFeishuApi(
       'im.message.create',
       createMessageRequest,
-      async () =>
-        await (this.deps.client as any).im.message.create(createMessageRequest)
+      async () => await client.im.message.create(createMessageRequest)
     );
     this.messageId = createResponse?.data?.message_id;
   }

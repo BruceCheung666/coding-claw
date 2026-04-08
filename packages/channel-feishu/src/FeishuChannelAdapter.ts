@@ -57,6 +57,44 @@ interface PendingRuntimeRoutingDecision {
   message: InboundChatMessage;
 }
 
+interface FeishuHeader {
+  key: string;
+  value: string;
+}
+
+interface FeishuWsFrame {
+  headers?: FeishuHeader[];
+}
+
+interface FeishuCardActionEvent {
+  action?: {
+    name?: string;
+    value?: Record<string, unknown>;
+    form_value?: Record<string, unknown>;
+  };
+}
+
+interface FeishuMessageClient {
+  im: {
+    message: {
+      update(request: Record<string, unknown>): Promise<unknown>;
+      reply(request: Record<string, unknown>): Promise<unknown>;
+    };
+  };
+}
+
+interface MutableWsClient {
+  handleEventData(data: FeishuWsFrame): unknown;
+}
+
+function asFeishuMessageClient(client: lark.Client): FeishuMessageClient {
+  return client as unknown as FeishuMessageClient;
+}
+
+function asMutableWsClient(client: lark.WSClient): MutableWsClient {
+  return client as unknown as MutableWsClient;
+}
+
 export class FeishuChannelAdapter {
   private readonly client: lark.Client;
   private wsClient?: lark.WSClient;
@@ -107,15 +145,15 @@ export class FeishuChannelAdapter {
       loggerLevel: lark.LoggerLevel.info
     });
 
-    const raw = this.wsClient as any;
+    const raw = asMutableWsClient(this.wsClient);
     const originalHandler = raw.handleEventData.bind(raw);
-    raw.handleEventData = (data: any) => {
+    raw.handleEventData = (data: FeishuWsFrame) => {
       logDebug('[feishu] ws raw frame', data);
-      const messageType = data.headers?.find?.(
-        (header: any) => header.key === 'type'
+      const messageType = data.headers?.find(
+        (header) => header.key === 'type'
       )?.value;
-      if (messageType === 'card') {
-        data.headers = data.headers.map((header: any) =>
+      if (messageType === 'card' && data.headers) {
+        data.headers = data.headers.map((header) =>
           header.key === 'type' ? { ...header, value: 'event' } : header
         );
       }
@@ -254,10 +292,11 @@ export class FeishuChannelAdapter {
         return;
       }
 
-      const execution = this.orchestrator.getChatExecutionSnapshot?.(
-        routedMessage.chatId
-      );
-      if (execution?.running && execution.willQueue) {
+      const execution =
+        typeof this.orchestrator.getChatExecutionSnapshot === 'function'
+          ? this.orchestrator.getChatExecutionSnapshot(routedMessage.chatId)
+          : { running: false, willQueue: false };
+      if (execution.running && execution.willQueue) {
         await this.sendRuntimeRoutingDecisionCard(routedMessage);
         await this.inboundMessageStore.markCompleted(routedMessage.messageId);
         logDebug('[feishu] runtime message requires queue-or-inject choice', {
@@ -291,12 +330,12 @@ export class FeishuChannelAdapter {
     payload: unknown
   ): Promise<Record<string, unknown> | undefined> {
     logDebug('[feishu] raw card action event', payload);
-    const event = payload as any;
-    const action = event?.action?.value ?? {};
+    const event = payload as FeishuCardActionEvent;
+    const action = event.action?.value ?? {};
     if (action.action === 'apply-reset-workspace') {
       return this.handleResetWorkspaceCardAction(
         action,
-        event?.action?.form_value ?? {}
+        event.action?.form_value ?? {}
       );
     }
     if (action.action === 'set-agent-mode') {
@@ -318,8 +357,8 @@ export class FeishuChannelAdapter {
     const interactionId = String(action.interaction_id ?? '');
     if (!interactionId) {
       logWarn('[feishu] card action missing interaction id', {
-        actionName: event?.action?.name,
-        hasFormValue: Boolean(event?.action?.form_value)
+        actionName: event.action?.name,
+        hasFormValue: Boolean(event.action?.form_value)
       });
       return;
     }
@@ -356,7 +395,7 @@ export class FeishuChannelAdapter {
         resolution = { kind: 'question', answers: { q_0: '确认开始' } };
         break;
       default: {
-        const formValue = event?.action?.form_value ?? {};
+        const formValue = event.action?.form_value ?? {};
         const selectedAnswers = new Map<string, string[]>();
         const otherAnswers = new Map<string, string>();
 
@@ -513,10 +552,11 @@ export class FeishuChannelAdapter {
         content: JSON.stringify(card)
       }
     };
+    const messageClient = asFeishuMessageClient(this.client);
     await callFeishuApi(
       'im.message.update',
       request,
-      async () => await (this.client as any).im.message.update(request)
+      async () => await messageClient.im.message.update(request)
     );
   }
 
@@ -553,10 +593,11 @@ export class FeishuChannelAdapter {
         content: JSON.stringify(buildRuntimeRoutingDecisionCard(record))
       }
     };
+    const messageClient = asFeishuMessageClient(this.client);
     await callFeishuApi(
       'im.message.reply',
       request,
-      async () => await (this.client as any).im.message.reply(request)
+      async () => await messageClient.im.message.reply(request)
     );
   }
 
@@ -568,10 +609,11 @@ export class FeishuChannelAdapter {
         content: JSON.stringify({ text })
       }
     };
+    const messageClient = asFeishuMessageClient(this.client);
     await callFeishuApi(
       'im.message.reply',
       request,
-      async () => await (this.client as any).im.message.reply(request)
+      async () => await messageClient.im.message.reply(request)
     );
   }
 
@@ -594,10 +636,11 @@ export class FeishuChannelAdapter {
           )
         }
       };
+      const messageClient = asFeishuMessageClient(this.client);
       await callFeishuApi(
         'im.message.reply',
         request,
-        async () => await (this.client as any).im.message.reply(request)
+        async () => await messageClient.im.message.reply(request)
       );
       return;
     }
@@ -616,10 +659,11 @@ export class FeishuChannelAdapter {
           )
         }
       };
+      const messageClient = asFeishuMessageClient(this.client);
       await callFeishuApi(
         'im.message.reply',
         request,
-        async () => await (this.client as any).im.message.reply(request)
+        async () => await messageClient.im.message.reply(request)
       );
       return;
     }
@@ -637,10 +681,11 @@ export class FeishuChannelAdapter {
         )
       }
     };
+    const messageClient = asFeishuMessageClient(this.client);
     await callFeishuApi(
       'im.message.reply',
       request,
-      async () => await (this.client as any).im.message.reply(request)
+      async () => await messageClient.im.message.reply(request)
     );
   }
 
@@ -649,9 +694,9 @@ export class FeishuChannelAdapter {
     command: SensitiveControlCommand
   ): Promise<void> {
     const interactionId = randomUUID();
-    const snapshot = (await (this.orchestrator as any).getChatControlSnapshot?.(
+    const snapshot = await this.orchestrator.getChatControlSnapshot(
       message.chatId
-    )) as { cwd?: string } | undefined;
+    );
     const record: PendingControlConfirmation = {
       interactionId,
       chatId: message.chatId,
@@ -661,7 +706,7 @@ export class FeishuChannelAdapter {
       commandText: message.text,
       title: command.title,
       description: command.description,
-      cwd: snapshot?.cwd
+      cwd: snapshot.cwd
     };
     this.pendingControlConfirmations.set(interactionId, record);
 
@@ -672,10 +717,11 @@ export class FeishuChannelAdapter {
         content: JSON.stringify(buildSensitiveControlConfirmationCard(record))
       }
     };
+    const messageClient = asFeishuMessageClient(this.client);
     await callFeishuApi(
       'im.message.reply',
       request,
-      async () => await (this.client as any).im.message.reply(request)
+      async () => await messageClient.im.message.reply(request)
     );
   }
 
