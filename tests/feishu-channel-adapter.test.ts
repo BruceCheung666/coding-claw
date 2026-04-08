@@ -247,6 +247,119 @@ describe('FeishuChannelAdapter', () => {
     expect(JSON.stringify(response.card.data)).toContain('/tmp/manual');
   });
 
+  it('accepts Windows manual workspace input from the /reset card', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'coding-claw-feishu-adapter-'));
+    createdDirs.push(dir);
+
+    const orchestrator = {
+      dispatchInbound: vi.fn(async () => ({
+        kind: 'control' as const,
+        response: {
+          format: 'text' as const,
+          text: 'unused'
+        }
+      })),
+      getChatControlSnapshot: vi.fn(async () => ({
+        cwd: 'D:\\Projects\\coding-claw',
+        workspacePath: 'D:\\Projects\\coding-claw',
+        defaultWorkspacePath: 'D:\\coding-claw-workspaces\\chat-1'
+      })),
+      dispatchControlCommand: vi.fn(async () => ({
+        format: 'text' as const,
+        text: '工作区已重置\ncwd: D:\\Projects\\CommonProject\nworkspace: D:\\Projects\\CommonProject'
+      })),
+      listPendingInteractions: vi.fn(async () => []),
+      handleInbound: vi.fn(async () => {})
+    };
+    const adapter = new FeishuChannelAdapter(
+      {
+        appId: 'app-id',
+        appSecret: 'app-secret',
+        inboundStorePath: join(dir, 'inbound.json')
+      },
+      orchestrator as any
+    );
+    (adapter as any).client = createClientStub();
+
+    const response = await (adapter as any).onCardAction({
+      action: {
+        value: {
+          action: 'apply-reset-workspace',
+          chat_id: 'chat-1',
+          workspace_source: 'manual'
+        },
+        form_value: {
+          manual_workspace_path: {
+            value: 'D:\\Projects\\CommonProject'
+          }
+        }
+      }
+    });
+
+    expect(orchestrator.dispatchControlCommand).toHaveBeenCalledWith(
+      'chat-1',
+      'reset',
+      'D:\\Projects\\CommonProject'
+    );
+    expect(response.toast.content).toBe('工作区已重置');
+    expect(JSON.stringify(response.card.data)).toContain(
+      'D:\\\\Projects\\\\CommonProject'
+    );
+  });
+
+  it('rejects blank manual workspace input from the /reset card', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'coding-claw-feishu-adapter-'));
+    createdDirs.push(dir);
+
+    const orchestrator = {
+      dispatchInbound: vi.fn(async () => ({
+        kind: 'control' as const,
+        response: {
+          format: 'text' as const,
+          text: 'unused'
+        }
+      })),
+      getChatControlSnapshot: vi.fn(async () => ({
+        cwd: 'D:\\Projects\\coding-claw',
+        workspacePath: 'D:\\Projects\\coding-claw',
+        defaultWorkspacePath: 'D:\\coding-claw-workspaces\\chat-1'
+      })),
+      dispatchControlCommand: vi.fn(async () => ({
+        format: 'text' as const,
+        text: 'should not be used'
+      })),
+      listPendingInteractions: vi.fn(async () => []),
+      handleInbound: vi.fn(async () => {})
+    };
+    const adapter = new FeishuChannelAdapter(
+      {
+        appId: 'app-id',
+        appSecret: 'app-secret',
+        inboundStorePath: join(dir, 'inbound.json')
+      },
+      orchestrator as any
+    );
+    (adapter as any).client = createClientStub();
+
+    const response = await (adapter as any).onCardAction({
+      action: {
+        value: {
+          action: 'apply-reset-workspace',
+          chat_id: 'chat-1',
+          workspace_source: 'manual'
+        },
+        form_value: {
+          manual_workspace_path: {
+            value: '   '
+          }
+        }
+      }
+    });
+
+    expect(orchestrator.dispatchControlCommand).not.toHaveBeenCalled();
+    expect(response.toast.content).toBe('请输入工作区路径');
+  });
+
   it('uses the current workspace option from the /reset card', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'coding-claw-feishu-adapter-'));
     createdDirs.push(dir);
@@ -776,7 +889,7 @@ describe('FeishuChannelAdapter', () => {
         kind: 'control' as const,
         response: {
           format: 'agent-model-picker' as const,
-          currentModel: 'claude-sonnet-4',
+          currentModel: 'claude-sonnet-4-6',
           options: [
             { model: 'default', label: 'default', description: '默认模型' },
             { model: 'best', label: 'best', description: '最强可用模型' },
@@ -843,7 +956,7 @@ describe('FeishuChannelAdapter', () => {
     const card = JSON.parse(
       client.im.message.reply.mock.calls[0]![0].data.content
     ) as Record<string, unknown>;
-    expect(JSON.stringify(card)).toContain('当前模型: **claude-sonnet-4**');
+    expect(JSON.stringify(card)).toContain('当前模型: **claude-sonnet-4-6**');
     expect(JSON.stringify(card)).toContain('sonnet[1m]');
     expect(JSON.stringify(card)).toContain('set-agent-model');
     expect(markCompleted).toHaveBeenCalledWith('om_model');

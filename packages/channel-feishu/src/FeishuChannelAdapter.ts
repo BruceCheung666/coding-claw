@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto';
 import {
   COMMAND_REGISTRY,
   errorToLogObject,
+  isCrossPlatformAbsolutePath,
   logDebug,
   logError,
   logWarn,
@@ -887,7 +888,7 @@ export class FeishuChannelAdapter {
       };
     }
 
-    if (!workspacePath.startsWith('/')) {
+    if (!isCrossPlatformAbsolutePath(workspacePath)) {
       return {
         toast: {
           type: 'warning',

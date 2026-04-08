@@ -1,6 +1,5 @@
 import { randomUUID } from 'node:crypto';
 import { mkdirSync } from 'node:fs';
-import { isAbsolute } from 'node:path';
 import type {
   AgentRuntime,
   ApprovalStore,
@@ -19,6 +18,7 @@ import {
   createInitialRenderModel,
   reduceRenderModel
 } from './render/reduceRenderModel.js';
+import { isCrossPlatformAbsolutePath } from './pathUtils.js';
 import type {
   AgentModelControlOption,
   AgentModeControlOption,
@@ -332,7 +332,7 @@ export class BridgeOrchestrator {
       };
     }
 
-    if (!isAbsolute(nextWorkspacePath)) {
+    if (!isCrossPlatformAbsolutePath(nextWorkspacePath)) {
       return {
         format: 'text',
         text: 'reset 目标工作区必须是绝对路径。'
@@ -754,9 +754,19 @@ const AGENT_MODE_OPTIONS: AgentModeControlOption[] = [
 ];
 
 function buildAgentModelOptions(): AgentModelControlOption[] {
-  const sonnetTarget = process.env.ANTHROPIC_DEFAULT_SONNET_MODEL?.trim();
-  const opusTarget = process.env.ANTHROPIC_DEFAULT_OPUS_MODEL?.trim();
-  const haikuTarget = process.env.ANTHROPIC_DEFAULT_HAIKU_MODEL?.trim();
+  // Runtime default model comes from CLAUDE_MODEL. The picker below exposes
+  // chat-level overrides and documents how the alias targets currently map.
+  const sonnetTarget =
+    process.env.ANTHROPIC_DEFAULT_SONNET_MODEL?.trim() || 'claude-sonnet-4-6';
+  const opusTarget =
+    process.env.ANTHROPIC_DEFAULT_OPUS_MODEL?.trim() || 'claude-opus-4-6';
+  const haikuTarget =
+    process.env.ANTHROPIC_DEFAULT_HAIKU_MODEL?.trim() ||
+    'claude-haiku-4-5-20251001';
+  const sonnet1mTarget =
+    process.env.ANTHROPIC_DEFAULT_SONNET_1M_MODEL?.trim() || sonnetTarget;
+  const opus1mTarget =
+    process.env.ANTHROPIC_DEFAULT_OPUS_1M_MODEL?.trim() || opusTarget;
   const disable1m = ['1', 'true', 'yes', 'on'].includes(
     (process.env.CLAUDE_CODE_DISABLE_1M_CONTEXT ?? '').trim().toLowerCase()
   );
@@ -793,12 +803,18 @@ function buildAgentModelOptions(): AgentModelControlOption[] {
           {
             model: 'sonnet[1m]',
             label: 'sonnet[1m]',
-            description: '1M 上下文 Sonnet alias，适合超大仓库或长文档场景。'
+            description: formatAliasDescription(
+              '1M 上下文 Sonnet alias，适合超大仓库或长文档场景。',
+              sonnet1mTarget
+            )
           },
           {
             model: 'opus[1m]',
             label: 'opus[1m]',
-            description: '1M 上下文 Opus alias，适合超长上下文深度分析。'
+            description: formatAliasDescription(
+              '1M 上下文 Opus alias，适合超长上下文深度分析。',
+              opus1mTarget
+            )
           }
         ] satisfies AgentModelControlOption[])
       : []),
