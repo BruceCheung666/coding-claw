@@ -334,11 +334,27 @@ describe('BridgeOrchestrator control commands', () => {
           'opus[1m]',
           'opusplan'
         ]);
-        expect(result.response.options.find((option) => option.model === 'sonnet')?.description).toContain('claude-sonnet-4-6');
-        expect(result.response.options.find((option) => option.model === 'opus')?.description).toContain('claude-opus-4-6');
-        expect(result.response.options.find((option) => option.model === 'haiku')?.description).toContain('claude-haiku-4-5-20251001');
-        expect(result.response.options.find((option) => option.model === 'sonnet[1m]')?.description).toContain('claude-sonnet-4-6');
-        expect(result.response.options.find((option) => option.model === 'opus[1m]')?.description).toContain('claude-opus-4-6');
+        expect(
+          result.response.options.find((option) => option.model === 'sonnet')
+            ?.description
+        ).toContain('claude-sonnet-4-6');
+        expect(
+          result.response.options.find((option) => option.model === 'opus')
+            ?.description
+        ).toContain('claude-opus-4-6');
+        expect(
+          result.response.options.find((option) => option.model === 'haiku')
+            ?.description
+        ).toContain('claude-haiku-4-5-20251001');
+        expect(
+          result.response.options.find(
+            (option) => option.model === 'sonnet[1m]'
+          )?.description
+        ).toContain('claude-sonnet-4-6');
+        expect(
+          result.response.options.find((option) => option.model === 'opus[1m]')
+            ?.description
+        ).toContain('claude-opus-4-6');
       }
     }
   });

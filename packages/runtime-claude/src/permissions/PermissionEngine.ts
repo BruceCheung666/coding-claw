@@ -471,7 +471,13 @@ export class PermissionEngine {
     ) {
       const resolvedPath = resolve(filePath);
       for (const directory of this.allowedDirectories) {
-        if (isWithinWorkspaceOrAllowedDirectories(resolvedPath, directory, new Set())) {
+        if (
+          isWithinWorkspaceOrAllowedDirectories(
+            resolvedPath,
+            directory,
+            new Set()
+          )
+        ) {
           return true;
         }
       }

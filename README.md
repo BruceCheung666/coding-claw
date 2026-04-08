@@ -148,6 +148,7 @@ CODING_CLAW_ENABLE_AGENT_TEAMS=1
 > 注意：不要把密钥、token 或其他凭据硬编码进源码，也不要提交到仓库。
 >
 > Windows 部署、双 env 模板与排障流程见：
+>
 > - `docs/simple-deployment-guide.md`
 > - `docs/deployment/env.official.example`
 > - `docs/deployment/env.proxy.example`

@@ -123,7 +123,9 @@ describe('PermissionPolicy', () => {
       expect(interactions[0].suggestions).toEqual([
         {
           type: 'addDirectories',
-          directories: [dirname(resolve('/tmp/shared/config.json')).replace(/\\/g, '/')],
+          directories: [
+            dirname(resolve('/tmp/shared/config.json')).replace(/\\/g, '/')
+          ],
           destination: 'session'
         }
       ]);

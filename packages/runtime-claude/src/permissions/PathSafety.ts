@@ -139,7 +139,9 @@ function isSensitivePath(filePath: string): boolean {
   const normalized = resolve(filePath);
   const normalizedSlashes = normalizePathSeparators(normalized);
 
-  if (SENSITIVE_PATTERNS.some((pattern) => normalizedSlashes.includes(pattern))) {
+  if (
+    SENSITIVE_PATTERNS.some((pattern) => normalizedSlashes.includes(pattern))
+  ) {
     return true;
   }
 
@@ -152,16 +154,17 @@ function isSensitivePath(filePath: string): boolean {
     return true;
   }
 
-  return normalized
-    .split(sep)
-    .some((part) => PROTECTED_DIRECTORIES.has(part));
+  return normalized.split(sep).some((part) => PROTECTED_DIRECTORIES.has(part));
 }
 
 function isBlockedDevicePath(filePath: string): boolean {
   return /^\/dev\/(?!null$)/.test(filePath);
 }
 
-function isSameOrWithinDirectory(targetPath: string, directoryPath: string): boolean {
+function isSameOrWithinDirectory(
+  targetPath: string,
+  directoryPath: string
+): boolean {
   if (targetPath === directoryPath) {
     return true;
   }

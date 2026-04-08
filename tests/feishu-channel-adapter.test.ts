@@ -302,7 +302,9 @@ describe('FeishuChannelAdapter', () => {
       'D:\\Projects\\CommonProject'
     );
     expect(response.toast.content).toBe('工作区已重置');
-    expect(JSON.stringify(response.card.data)).toContain('D:\\\\Projects\\\\CommonProject');
+    expect(JSON.stringify(response.card.data)).toContain(
+      'D:\\\\Projects\\\\CommonProject'
+    );
   });
 
   it('rejects blank manual workspace input from the /reset card', async () => {

@@ -17,11 +17,14 @@ describe('PathSafety', () => {
 
   it('treats Windows protected directories as sensitive', () => {
     expect(
-      evaluateFilePathAccess('D:\\Projects\\coding-claw\\.claude\\settings.json', {
-        cwd: 'D:\\Projects\\coding-claw',
-        allowedDirectories: new Set<string>(),
-        writeIntent: true
-      })
+      evaluateFilePathAccess(
+        'D:\\Projects\\coding-claw\\.claude\\settings.json',
+        {
+          cwd: 'D:\\Projects\\coding-claw',
+          allowedDirectories: new Set<string>(),
+          writeIntent: true
+        }
+      )
     ).toEqual({
       status: 'ask',
       reason: {
