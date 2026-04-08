@@ -772,9 +772,10 @@ describe('LocalShellExecutor', () => {
       throw new Error('No test shell available in current environment.');
     }
 
-    const resolvedShellPath = shellPath.toLowerCase().endsWith('bash')
-      ? join(dirname(shellPath), 'bash.exe')
-      : shellPath;
+    const resolvedShellPath =
+      process.platform === 'win32' && shellPath.toLowerCase().endsWith('bash')
+        ? join(dirname(shellPath), 'bash.exe')
+        : shellPath;
     const executor = new LocalShellExecutor({
       shellPath: resolvedShellPath
     });

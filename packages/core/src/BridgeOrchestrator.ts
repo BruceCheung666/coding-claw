@@ -1,6 +1,5 @@
 import { randomUUID } from 'node:crypto';
 import { mkdirSync } from 'node:fs';
-import { isAbsolute } from 'node:path';
 import type {
   AgentRuntime,
   ApprovalStore,
@@ -19,6 +18,7 @@ import {
   createInitialRenderModel,
   reduceRenderModel
 } from './render/reduceRenderModel.js';
+import { isCrossPlatformAbsolutePath } from './pathUtils.js';
 import type {
   AgentModelControlOption,
   AgentModeControlOption,
@@ -332,7 +332,7 @@ export class BridgeOrchestrator {
       };
     }
 
-    if (!isAbsolute(nextWorkspacePath)) {
+    if (!isCrossPlatformAbsolutePath(nextWorkspacePath)) {
       return {
         format: 'text',
         text: 'reset 目标工作区必须是绝对路径。'

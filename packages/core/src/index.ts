@@ -28,3 +28,4 @@ export {
   createInitialRenderModel,
   reduceRenderModel
 } from './render/reduceRenderModel.js';
+export { isCrossPlatformAbsolutePath } from './pathUtils.js';

@@ -1,9 +1,9 @@
 import * as lark from '@larksuiteoapi/node-sdk';
 import { randomUUID } from 'node:crypto';
-import { isAbsolute } from 'node:path';
 import {
   COMMAND_REGISTRY,
   errorToLogObject,
+  isCrossPlatformAbsolutePath,
   logDebug,
   logError,
   logWarn,
@@ -888,9 +888,7 @@ export class FeishuChannelAdapter {
       };
     }
 
-    // Use Node's absolute-path check so Windows paths like D:\\Projects\\... are
-    // accepted by the reset card the same way as Unix absolute paths.
-    if (!isAbsolute(workspacePath)) {
+    if (!isCrossPlatformAbsolutePath(workspacePath)) {
       return {
         toast: {
           type: 'warning',

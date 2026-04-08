@@ -1,4 +1,3 @@
-import { dirname, resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import type { PendingInteraction } from '../packages/core/src/types.js';
 import { PermissionPolicy } from '../packages/runtime-claude/src/permissions/PermissionPolicy.js';
@@ -123,9 +122,7 @@ describe('PermissionPolicy', () => {
       expect(interactions[0].suggestions).toEqual([
         {
           type: 'addDirectories',
-          directories: [
-            dirname(resolve('/tmp/shared/config.json')).replace(/\\/g, '/')
-          ],
+          directories: ['/tmp/shared'],
           destination: 'session'
         }
       ]);

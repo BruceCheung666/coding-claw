@@ -1,4 +1,4 @@
-import { basename, relative, resolve, sep } from 'node:path';
+import { posix, win32 } from 'node:path';
 import type { PermissionReason, PermissionReasonKind } from '@coding-claw/core';
 
 const SENSITIVE_PATTERNS = [
@@ -53,7 +53,12 @@ export function getResolvedFilePath(
         ? toolInput.path
         : undefined;
 
-  return raw ? resolve(cwd, raw) : undefined;
+  if (!raw) {
+    return undefined;
+  }
+
+  const pathApi = getPathApi(raw, cwd);
+  return pathApi.resolve(cwd, raw);
 }
 
 export function isWithinWorkspaceOrAllowedDirectories(
@@ -61,14 +66,21 @@ export function isWithinWorkspaceOrAllowedDirectories(
   cwd: string,
   allowedDirectories: Set<string>
 ): boolean {
-  const resolvedTarget = resolve(targetPath);
-  const resolvedCwd = resolve(cwd);
-  if (isSameOrWithinDirectory(resolvedTarget, resolvedCwd)) {
+  const pathApi = getPathApi(targetPath, cwd, ...allowedDirectories);
+  const resolvedTarget = pathApi.resolve(targetPath);
+  const resolvedCwd = pathApi.resolve(cwd);
+  if (isSameOrWithinDirectory(resolvedTarget, resolvedCwd, pathApi)) {
     return true;
   }
 
   for (const directory of allowedDirectories) {
-    if (isSameOrWithinDirectory(resolvedTarget, resolve(directory))) {
+    if (
+      isSameOrWithinDirectory(
+        resolvedTarget,
+        pathApi.resolve(directory),
+        pathApi
+      )
+    ) {
       return true;
     }
   }
@@ -84,7 +96,12 @@ export function evaluateFilePathAccess(
     writeIntent: boolean;
   }
 ): PathSafetyResult {
-  const normalized = resolve(resolvedPath);
+  const pathApi = getPathApi(
+    resolvedPath,
+    options.cwd,
+    ...options.allowedDirectories
+  );
+  const normalized = pathApi.resolve(resolvedPath);
 
   if (isBlockedDevicePath(normalized)) {
     return {
@@ -136,7 +153,8 @@ export function evaluateFilePathAccess(
 }
 
 function isSensitivePath(filePath: string): boolean {
-  const normalized = resolve(filePath);
+  const pathApi = getPathApi(filePath);
+  const normalized = pathApi.resolve(filePath);
   const normalizedSlashes = normalizePathSeparators(normalized);
 
   if (
@@ -149,12 +167,14 @@ function isSensitivePath(filePath: string): boolean {
     return true;
   }
 
-  const fileName = basename(normalized);
+  const fileName = pathApi.basename(normalized);
   if (SENSITIVE_FILENAMES.has(fileName) || PROTECTED_FILES.has(fileName)) {
     return true;
   }
 
-  return normalized.split(sep).some((part) => PROTECTED_DIRECTORIES.has(part));
+  return normalized
+    .split(pathApi.sep)
+    .some((part) => PROTECTED_DIRECTORIES.has(part));
 }
 
 function isBlockedDevicePath(filePath: string): boolean {
@@ -163,19 +183,18 @@ function isBlockedDevicePath(filePath: string): boolean {
 
 function isSameOrWithinDirectory(
   targetPath: string,
-  directoryPath: string
+  directoryPath: string,
+  pathApi: typeof posix | typeof win32
 ): boolean {
   if (targetPath === directoryPath) {
     return true;
   }
 
-  // Use path.relative() instead of raw string prefixes so Windows drive letters
-  // and separators behave the same as Unix-style workspace checks.
-  const relativePath = relative(directoryPath, targetPath);
+  const relativePath = pathApi.relative(directoryPath, targetPath);
   return (
     relativePath !== '' &&
     !relativePath.startsWith('..') &&
-    !relativePath.includes(`..${sep}`)
+    !relativePath.includes(`..${pathApi.sep}`)
   );
 }
 
@@ -185,6 +204,16 @@ function normalizePathSeparators(filePath: string): string {
 
 function containsUncPath(filePath: string): boolean {
   return filePath.startsWith('\\\\') || filePath.startsWith('//');
+}
+
+function isWindowsStylePath(filePath: string): boolean {
+  return /^[a-zA-Z]:[\\/]/.test(filePath) || containsUncPath(filePath);
+}
+
+function getPathApi(...paths: string[]): typeof posix | typeof win32 {
+  return paths.some((candidate) => isWindowsStylePath(candidate))
+    ? win32
+    : posix;
 }
 
 function createReason(
