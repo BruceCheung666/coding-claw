@@ -1134,21 +1134,26 @@ export class FeishuChannelAdapter {
       };
     };
 
-    if (event.message?.message_type !== 'text') {
+    const message = event.message;
+    const messageType = message?.message_type;
+    if (messageType !== 'text' && messageType !== 'post') {
       return undefined;
     }
 
-    const chatId = event.message?.chat_id;
-    const messageId = event.message?.message_id;
+    const chatId = message?.chat_id;
+    const messageId = message?.message_id;
     if (!chatId || !messageId) {
       return undefined;
     }
 
     try {
-      const content = JSON.parse(event.message.content ?? '{}') as {
-        text?: string;
-      };
-      const text = (content.text ?? '').replace(/@_user_\d+/g, '').trim();
+      const rawContent = JSON.parse(message.content ?? '{}') as
+        | { text?: string }
+        | {
+            title?: string;
+            content?: Array<Array<Record<string, unknown>>>;
+          };
+      const text = normalizeInboundMessageText(messageType, rawContent);
       if (!text) {
         return undefined;
       }
@@ -1163,6 +1168,72 @@ export class FeishuChannelAdapter {
       return undefined;
     }
   }
+}
+
+function normalizeInboundMessageText(
+  messageType: string,
+  content:
+    | { text?: string }
+    | {
+        title?: string;
+        content?: Array<Array<Record<string, unknown>>>;
+      }
+): string {
+  if (messageType === 'text') {
+    return normalizeInboundText((content as { text?: string }).text ?? '');
+  }
+
+  const postContent = content as {
+    title?: string;
+    content?: Array<Array<Record<string, unknown>>>;
+  };
+  const blocks = postContent.content ?? [];
+  const lines = blocks
+    .map((block) =>
+      block
+        .map((node) => extractPostNodeText(node))
+        .join('')
+        .trimEnd()
+    )
+    .filter(Boolean);
+  const merged = [postContent.title ?? '', ...lines].filter(Boolean).join('\n');
+  return normalizeInboundText(merged);
+}
+
+function extractPostNodeText(node: Record<string, unknown>): string {
+  const tag = typeof node.tag === 'string' ? node.tag : '';
+  switch (tag) {
+    case 'text':
+      return typeof node.text === 'string' ? node.text : '';
+    case 'a':
+      return typeof node.text === 'string'
+        ? node.text
+        : typeof node.href === 'string'
+          ? node.href
+          : '';
+    case 'at':
+      return typeof node.user_name === 'string'
+        ? `@${node.user_name}`
+        : typeof node.text === 'string'
+          ? node.text
+          : '';
+    case 'img':
+      return '[图片]';
+    case 'media':
+      return '[媒体]';
+    case 'emotion':
+      return typeof node.emoji_type === 'string' ? `:${node.emoji_type}:` : '';
+    case 'hr':
+      return '---';
+    case 'code_block':
+      return typeof node.text === 'string' ? node.text : '';
+    default:
+      return typeof node.text === 'string' ? node.text : '';
+  }
+}
+
+function normalizeInboundText(text: string): string {
+  return text.replace(/@_user_\d+/g, '').trim();
 }
 
 function normalizeFormValue(value: unknown): string {

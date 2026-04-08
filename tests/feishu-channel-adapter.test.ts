@@ -1430,7 +1430,121 @@ describe('FeishuChannelAdapter', () => {
       JSON.stringify(client.im.message.update.mock.calls[0]![0])
     ).toContain('未开始');
   });
+  it('parses post rich text messages into plain text lines', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'coding-claw-feishu-adapter-'));
+    createdDirs.push(dir);
+
+    const orchestrator = {
+      dispatchInbound: vi.fn(async (message) => ({
+        kind: 'runtime' as const,
+        message
+      })),
+      dispatchControlCommand: vi.fn(async () => ({
+        format: 'text' as const,
+        text: 'ok'
+      })),
+      listPendingInteractions: vi.fn(async () => []),
+      handleInbound: vi.fn(async () => {})
+    };
+
+    const adapter = new FeishuChannelAdapter(
+      {
+        appId: 'app-id',
+        appSecret: 'app-secret',
+        inboundStorePath: join(dir, 'inbound.json')
+      },
+      orchestrator as any
+    );
+    (adapter as any).client = createClientStub();
+
+    const markCompleted = vi.fn(async () => {});
+    const markFailed = vi.fn(async () => {});
+    (adapter as any).inboundMessageStore = {
+      reserve: vi.fn(async () => ({
+        action: 'accepted',
+        record: {
+          messageId: 'om_post_1',
+          chatId: 'chat-1',
+          status: 'processing'
+        }
+      })),
+      markCompleted,
+      markFailed
+    };
+
+    await (adapter as any).onMessage(
+      createPostMessagePayload('om_post_1', 'chat-1', {
+        title: '',
+        content: [
+          [{ tag: 'text', text: '重复我下面说的话：', style: [] }],
+          [{ tag: 'text', text: '000', style: [] }],
+          [
+            { tag: 'text', text: '- ', style: [] },
+            { tag: 'text', text: '111', style: [] }
+          ],
+          [
+            { tag: 'text', text: '- ', style: [] },
+            { tag: 'text', text: '222', style: [] }
+          ],
+          [
+            { tag: 'text', text: '1. ', style: [] },
+            { tag: 'text', text: '333', style: [] }
+          ],
+          [
+            { tag: 'text', text: '2. ', style: [] },
+            { tag: 'text', text: '444', style: [] }
+          ],
+          [
+            { tag: 'text', text: '3. ', style: [] },
+            { tag: 'text', text: '555', style: [] }
+          ],
+          [{ tag: 'text', text: '666', style: [] }],
+          [{ tag: 'text', text: '777', style: [] }],
+          [{ tag: 'text', text: '888', style: [] }]
+        ]
+      })
+    );
+    await flushMicrotasks();
+
+    expect(orchestrator.dispatchInbound).toHaveBeenCalledTimes(1);
+    expect(orchestrator.dispatchInbound).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: 'feishu',
+        chatId: 'chat-1',
+        messageId: 'om_post_1',
+        text: [
+          '重复我下面说的话：',
+          '000',
+          '- 111',
+          '- 222',
+          '1. 333',
+          '2. 444',
+          '3. 555',
+          '666',
+          '777',
+          '888'
+        ].join('\n')
+      })
+    );
+    expect(markCompleted).toHaveBeenCalledWith('om_post_1');
+    expect(markFailed).not.toHaveBeenCalled();
+  });
 });
+
+function createPostMessagePayload(
+  messageId: string,
+  chatId: string,
+  post: Record<string, unknown>
+): unknown {
+  return {
+    message: {
+      chat_id: chatId,
+      message_id: messageId,
+      message_type: 'post',
+      content: JSON.stringify(post)
+    }
+  };
+}
 
 function createTextMessagePayload(
   messageId: string,
