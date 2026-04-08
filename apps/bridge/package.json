@@ -6,7 +6,7 @@
   "main": "./dist/main.js",
   "types": "./dist/main.d.ts",
   "scripts": {
-    "dev": "node --import tsx ./src/main.ts",
+    "dev": "node --conditions=source --import tsx ./src/main.ts",
     "start": "node ./dist/main.js"
   },
   "dependencies": {

@@ -1,11 +1,13 @@
 import { mkdirSync } from 'node:fs';
+import { homedir } from 'node:os';
 import { errorToLogObject, logDebug } from '@coding-claw/core';
 import {
   BridgeOrchestrator,
-  InMemoryApprovalStore,
-  InMemoryChatControlStateStore,
-  InMemoryTranscriptStore,
-  InMemoryWorkspaceBindingStore
+  FileApprovalStore,
+  FileChatControlStateStore,
+  FileTranscriptStore,
+  FileWorkspaceBindingStore,
+  SessionPathResolver
 } from '@coding-claw/core';
 import { FeishuChannelAdapter } from '@coding-claw/channel-feishu';
 import { ClaudeAgentRuntime } from '@coding-claw/runtime-claude';
@@ -24,6 +26,9 @@ interface AppConfig {
     claudeExecutablePath?: string;
     shellPath?: string;
     enableAgentTeams: boolean;
+  };
+  session: {
+    rootPath: string;
   };
 }
 
@@ -47,6 +52,8 @@ function loadConfig(): AppConfig {
   const workspaceRoot =
     process.env.CODING_CLAW_WORKSPACE_ROOT ??
     `${process.cwd()}/.claude/workspaces`;
+  const sessionRoot =
+    process.env.CODING_CLAW_SESSION_ROOT ?? `${homedir()}/.coding-claw/session`;
 
   return {
     feishu: {
@@ -63,6 +70,9 @@ function loadConfig(): AppConfig {
       enableAgentTeams:
         isTruthyEnv(process.env.CODING_CLAW_ENABLE_AGENT_TEAMS) ||
         isTruthyEnv(process.env.CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS)
+    },
+    session: {
+      rootPath: sessionRoot
     }
   };
 }
@@ -70,6 +80,7 @@ function loadConfig(): AppConfig {
 async function main(): Promise<void> {
   const config = loadConfig();
   mkdirSync(config.runtime.workspaceRoot, { recursive: true });
+  mkdirSync(config.session.rootPath, { recursive: true });
 
   const runtime = new ClaudeAgentRuntime({
     model: config.runtime.model,
@@ -82,16 +93,17 @@ async function main(): Promise<void> {
         }
       : undefined
   });
+  const sessionResolver = new SessionPathResolver(config.session.rootPath);
 
   const orchestrator = new BridgeOrchestrator({
     runtime,
-    approvals: new InMemoryApprovalStore(),
-    controls: new InMemoryChatControlStateStore(),
-    bindings: new InMemoryWorkspaceBindingStore(),
+    approvals: new FileApprovalStore(sessionResolver),
+    controls: new FileChatControlStateStore(sessionResolver),
+    bindings: new FileWorkspaceBindingStore(sessionResolver),
     shellExecutor: new LocalShellExecutor({
       shellPath: config.runtime.shellPath
     }),
-    transcripts: new InMemoryTranscriptStore(),
+    transcripts: new FileTranscriptStore(sessionResolver),
     workspaceRoot: config.runtime.workspaceRoot
   });
 

@@ -302,6 +302,8 @@ export class BridgeOrchestrator {
         return this.handleAgentStatus(binding, control);
       case 'reset':
         return this.handleReset(argsText, binding, control);
+      case 'new':
+        return this.handleNewSession(argsText, binding, control);
       case 'shell.exec':
         return this.handleShellExec(argsText, binding, control);
       case 'shell.status':
@@ -356,6 +358,30 @@ export class BridgeOrchestrator {
       format: 'text',
       text: [
         '工作区已重置',
+        `cwd: ${control.cwd}`,
+        `workspace: ${binding.workspacePath}`
+      ].join('\n')
+    };
+  }
+
+  private async handleNewSession(
+    argsText: string,
+    binding: WorkspaceBinding,
+    control: ChatControlState
+  ): Promise<ControlResponse> {
+    if (argsText.trim()) {
+      return {
+        format: 'text',
+        text: '用法: /new'
+      };
+    }
+
+    await this.resetAgentState(binding, control);
+
+    return {
+      format: 'text',
+      text: [
+        '已开启新会话',
         `cwd: ${control.cwd}`,
         `workspace: ${binding.workspacePath}`
       ].join('\n')
@@ -560,6 +586,7 @@ export class BridgeOrchestrator {
     this.sessions.delete(binding.chatId);
     await this.deps.runtime.dropSession(binding.chatId);
     await this.deps.approvals.clearChat(binding.chatId);
+    await this.deps.transcripts.clearChat(binding.chatId);
 
     binding.sessionId = undefined;
     binding.updatedAt = new Date().toISOString();

@@ -8,6 +8,7 @@ import {
   InMemoryWorkspaceBindingStore,
   parseInboundText,
   type AgentRuntime,
+  type BridgeEvent,
   type RuntimeSession,
   type RuntimeSessionStatus,
   type ShellExecutor,
@@ -115,6 +116,13 @@ describe('parseInboundText', () => {
     if (canonical.kind === 'command') {
       expect(canonical.match.id).toBe('reset');
       expect(canonical.match.argsText).toBe('');
+    }
+
+    const newSession = parseInboundText('/new');
+    expect(newSession.kind).toBe('command');
+    if (newSession.kind === 'command') {
+      expect(newSession.match.id).toBe('new');
+      expect(newSession.match.argsText).toBe('');
     }
 
     const alias = parseInboundText('/sx git status');
@@ -225,6 +233,7 @@ describe('BridgeOrchestrator control commands', () => {
     const controls = new InMemoryChatControlStateStore();
     const bindings = new InMemoryWorkspaceBindingStore();
     const shellExecutor = new StubShellExecutor();
+    const transcripts = new InMemoryTranscriptStore();
 
     await bindings.upsert({
       chatId: 'chat-1',
@@ -255,6 +264,13 @@ describe('BridgeOrchestrator control commands', () => {
       toolInput: {},
       suggestions: []
     });
+    await transcripts.append({
+      type: 'turn.started',
+      chatId: 'chat-1',
+      turnId: 'turn-1',
+      prompt: 'hello',
+      startedAt: '2026-04-02T00:00:00.000Z'
+    } satisfies BridgeEvent);
 
     const orchestrator = new BridgeOrchestrator({
       runtime,
@@ -262,7 +278,7 @@ describe('BridgeOrchestrator control commands', () => {
       bindings,
       controls,
       shellExecutor,
-      transcripts: new InMemoryTranscriptStore(),
+      transcripts,
       workspaceRoot: '/tmp'
     });
 
@@ -279,8 +295,119 @@ describe('BridgeOrchestrator control commands', () => {
       '/tmp/custom-workspace'
     );
     expect(await approvals.listPending('chat-1')).toEqual([]);
+    expect(await transcripts.listByChat('chat-1')).toEqual([]);
     expect((await controls.get('chat-1'))?.cwd).toBe('/tmp/custom-workspace');
     expect((await controls.get('chat-1'))?.shellStatus).toBe('inactive');
+  });
+
+  it('starts a new session through /new without resetting cwd or workspace', async () => {
+    const runtime = new StubRuntime();
+    const approvals = new InMemoryApprovalStore();
+    const controls = new InMemoryChatControlStateStore();
+    const bindings = new InMemoryWorkspaceBindingStore();
+    const shellExecutor = new StubShellExecutor();
+    const transcripts = new InMemoryTranscriptStore();
+
+    shellExecutor.status = {
+      active: true,
+      running: false,
+      sessionId: 'shell-1',
+      pid: 123
+    };
+
+    await bindings.upsert({
+      chatId: 'chat-1',
+      workspaceId: 'chat-1',
+      workspacePath: '/tmp/chat-1',
+      createdAt: '2026-04-02T00:00:00.000Z',
+      updatedAt: '2026-04-02T00:00:00.000Z',
+      runtime: 'claude',
+      channel: 'feishu',
+      sessionId: 'session-1',
+      mode: 'default',
+      metadata: {}
+    });
+    await controls.upsert({
+      chatId: 'chat-1',
+      inputMode: 'agent',
+      cwd: '/tmp/chat-1/subdir',
+      shellStatus: 'ready',
+      shellSessionId: 'shell-1',
+      createdAt: '2026-04-02T00:00:00.000Z',
+      updatedAt: '2026-04-02T00:00:00.000Z'
+    });
+    await approvals.create('chat-1', 'turn-1', {
+      kind: 'permission',
+      id: 'approval-1',
+      createdAt: '2026-04-02T00:00:00.000Z',
+      toolName: 'Bash',
+      toolInput: {},
+      suggestions: []
+    });
+    await transcripts.append({
+      type: 'turn.started',
+      chatId: 'chat-1',
+      turnId: 'turn-1',
+      prompt: 'hello',
+      startedAt: '2026-04-02T00:00:00.000Z'
+    } satisfies BridgeEvent);
+
+    const orchestrator = new BridgeOrchestrator({
+      runtime,
+      approvals,
+      bindings,
+      controls,
+      shellExecutor,
+      transcripts,
+      workspaceRoot: '/tmp'
+    });
+
+    const result = await orchestrator.dispatchControlCommand(
+      'chat-1',
+      'new',
+      ''
+    );
+
+    expect(result.format).toBe('text');
+    if (result.format === 'text') {
+      expect(result.text).toContain('已开启新会话');
+      expect(result.text).toContain('cwd: /tmp/chat-1/subdir');
+      expect(result.text).toContain('workspace: /tmp/chat-1');
+    }
+    expect(runtime.dropCalls).toEqual(['chat-1']);
+    expect((await bindings.get('chat-1'))?.sessionId).toBeUndefined();
+    expect((await bindings.get('chat-1'))?.workspacePath).toBe('/tmp/chat-1');
+    expect(await approvals.listPending('chat-1')).toEqual([]);
+    expect(await transcripts.listByChat('chat-1')).toEqual([]);
+    expect((await controls.get('chat-1'))?.cwd).toBe('/tmp/chat-1/subdir');
+    expect((await controls.get('chat-1'))?.shellStatus).toBe('ready');
+    expect((await controls.get('chat-1'))?.shellSessionId).toBe('shell-1');
+    expect((await shellExecutor.getStatus('chat-1')).sessionId).toBe('shell-1');
+  });
+
+  it('rejects extra arguments for /new', async () => {
+    const runtime = new StubRuntime();
+    const orchestrator = new BridgeOrchestrator({
+      runtime,
+      approvals: new InMemoryApprovalStore(),
+      bindings: new InMemoryWorkspaceBindingStore(),
+      controls: new InMemoryChatControlStateStore(),
+      shellExecutor: new StubShellExecutor(),
+      transcripts: new InMemoryTranscriptStore(),
+      workspaceRoot: '/tmp'
+    });
+
+    const result = await orchestrator.dispatchControlCommand(
+      'chat-1',
+      'new',
+      'unexpected'
+    );
+
+    expect(result).toEqual({
+      format: 'text',
+      text: '用法: /new'
+    });
+    expect(runtime.dropCalls).toEqual([]);
   });
 
   it('shows the effective model through /agent model', async () => {

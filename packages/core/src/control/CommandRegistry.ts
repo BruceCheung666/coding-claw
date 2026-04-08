@@ -3,6 +3,7 @@ export type CommandId =
   | 'agent.model'
   | 'agent.status'
   | 'reset'
+  | 'new'
   | 'shell.exec'
   | 'shell.status'
   | 'chat.status'
@@ -65,6 +66,14 @@ export const COMMAND_REGISTRY: CommandDefinition[] = [
     aliases: [],
     description: '重置 Agent 和 Shell，并重新选择工作区目录。',
     usage: '/reset'
+  },
+  {
+    id: 'new',
+    canonicalTokens: ['new'],
+    aliases: [],
+    description:
+      '仅开启新的 Agent 会话，保留当前 cwd、workspace 和 shell 状态。',
+    usage: '/new'
   },
   {
     id: 'shell.exec',

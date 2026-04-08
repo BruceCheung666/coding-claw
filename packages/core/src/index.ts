@@ -19,10 +19,15 @@ export {
   sanitizeForLog
 } from './logging.js';
 
+export { FileApprovalStore } from './stores/FileApprovalStore.js';
+export { FileChatControlStateStore } from './stores/FileChatControlStateStore.js';
+export { FileTranscriptStore } from './stores/FileTranscriptStore.js';
+export { FileWorkspaceBindingStore } from './stores/FileWorkspaceBindingStore.js';
 export { InMemoryApprovalStore } from './stores/InMemoryApprovalStore.js';
 export { InMemoryChatControlStateStore } from './stores/InMemoryChatControlStateStore.js';
 export { InMemoryTranscriptStore } from './stores/InMemoryTranscriptStore.js';
 export { InMemoryWorkspaceBindingStore } from './stores/InMemoryWorkspaceBindingStore.js';
+export { SessionPathResolver } from './stores/SessionPathResolver.js';
 
 export {
   createInitialRenderModel,

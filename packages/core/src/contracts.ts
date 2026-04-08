@@ -65,6 +65,7 @@ export interface AgentRuntime {
 export interface TranscriptStore {
   append(event: BridgeEvent): Promise<void>;
   listByChat(chatId: string): Promise<BridgeEvent[]>;
+  clearChat(chatId: string): Promise<void>;
 }
 
 export interface WorkspaceBindingStore {

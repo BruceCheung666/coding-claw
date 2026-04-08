@@ -1,10 +1,18 @@
-import { describe, expect, it, vi } from 'vitest';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   BridgeOrchestrator,
+  FileApprovalStore,
+  FileChatControlStateStore,
+  FileTranscriptStore,
+  FileWorkspaceBindingStore,
   InMemoryApprovalStore,
   InMemoryChatControlStateStore,
   InMemoryTranscriptStore,
   InMemoryWorkspaceBindingStore,
+  SessionPathResolver,
   type AgentRuntime,
   type BridgeEvent,
   type RenderSurface,
@@ -13,6 +21,17 @@ import {
   type ShellSessionSnapshot,
   type WorkspaceBinding
 } from '../packages/core/src/index.js';
+
+const createdDirs: string[] = [];
+
+afterEach(async () => {
+  await Promise.all(
+    createdDirs.map(async (dir) => {
+      await rm(dir, { recursive: true, force: true });
+    })
+  );
+  createdDirs.length = 0;
+});
 
 class StubShellExecutor implements ShellExecutor {
   async execute() {
@@ -218,5 +237,132 @@ describe('BridgeOrchestrator', () => {
       willQueue: false,
       sessionId: 'session-running-1'
     });
+  });
+
+  it('reloads persisted binding sessionId after restart', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'coding-claw-bridge-persist-'));
+    createdDirs.push(dir);
+    const resolver = new SessionPathResolver(dir);
+    const firstObserved: Array<string | undefined> = [];
+    const secondObserved: Array<string | undefined> = [];
+
+    const firstRuntime: AgentRuntime = {
+      async getOrCreateSession(
+        binding: WorkspaceBinding
+      ): Promise<RuntimeSession> {
+        firstObserved.push(binding.sessionId);
+        return {
+          ref: {
+            chatId: binding.chatId,
+            workspaceId: binding.workspaceId,
+            sessionId: binding.sessionId
+          },
+          busy: false,
+          async getStatus() {
+            return {
+              state: 'idle',
+              sessionId: binding.sessionId,
+              supportsContextUsage: false
+            };
+          },
+          async *runTurn(input) {
+            yield {
+              type: 'turn.completed',
+              chatId: input.chatId,
+              turnId: input.turnId,
+              status: 'completed',
+              finalText: 'ok',
+              sessionId: 'persisted-session-1',
+              finishedAt: new Date('2026-04-08T00:00:00Z').toISOString()
+            } satisfies BridgeEvent;
+          },
+          async injectUserMessage() {},
+          resolveInteraction() {},
+          abort() {}
+        };
+      },
+      async dropSession(): Promise<void> {}
+    };
+
+    const firstOrchestrator = new BridgeOrchestrator({
+      runtime: firstRuntime,
+      approvals: new FileApprovalStore(resolver),
+      bindings: new FileWorkspaceBindingStore(resolver),
+      controls: new FileChatControlStateStore(resolver),
+      shellExecutor: new StubShellExecutor(),
+      transcripts: new FileTranscriptStore(resolver),
+      workspaceRoot: '/tmp/coding-claw-bridge-orchestrator'
+    });
+
+    await firstOrchestrator.handleInbound(
+      {
+        channel: 'feishu',
+        chatId: 'chat-persist',
+        messageId: 'msg-1',
+        text: 'hello'
+      },
+      createRenderSurface()
+    );
+
+    const secondRuntime: AgentRuntime = {
+      async getOrCreateSession(
+        binding: WorkspaceBinding
+      ): Promise<RuntimeSession> {
+        secondObserved.push(binding.sessionId);
+        return {
+          ref: {
+            chatId: binding.chatId,
+            workspaceId: binding.workspaceId,
+            sessionId: binding.sessionId
+          },
+          busy: false,
+          async getStatus() {
+            return {
+              state: 'idle',
+              sessionId: binding.sessionId,
+              supportsContextUsage: false
+            };
+          },
+          async *runTurn(input) {
+            yield {
+              type: 'turn.completed',
+              chatId: input.chatId,
+              turnId: input.turnId,
+              status: 'completed',
+              finalText: 'ok-2',
+              sessionId: binding.sessionId,
+              finishedAt: new Date('2026-04-08T00:00:01Z').toISOString()
+            } satisfies BridgeEvent;
+          },
+          async injectUserMessage() {},
+          resolveInteraction() {},
+          abort() {}
+        };
+      },
+      async dropSession(): Promise<void> {}
+    };
+
+    const secondOrchestrator = new BridgeOrchestrator({
+      runtime: secondRuntime,
+      approvals: new FileApprovalStore(resolver),
+      bindings: new FileWorkspaceBindingStore(resolver),
+      controls: new FileChatControlStateStore(resolver),
+      shellExecutor: new StubShellExecutor(),
+      transcripts: new FileTranscriptStore(resolver),
+      workspaceRoot: '/tmp/coding-claw-bridge-orchestrator'
+    });
+
+    await secondOrchestrator.handleInbound(
+      {
+        channel: 'feishu',
+        chatId: 'chat-persist',
+        messageId: 'msg-2',
+        text: 'hello again'
+      },
+      createRenderSurface()
+    );
+
+    expect(firstObserved).toEqual([undefined]);
+    expect(secondObserved).toEqual(['persisted-session-1']);
   });
 });

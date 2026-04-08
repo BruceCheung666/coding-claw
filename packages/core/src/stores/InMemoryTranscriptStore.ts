@@ -18,4 +18,8 @@ export class InMemoryTranscriptStore implements TranscriptStore {
   async listByChat(chatId: string): Promise<BridgeEvent[]> {
     return (this.entries.get(chatId) ?? []).map((entry) => entry.event);
   }
+
+  async clearChat(chatId: string): Promise<void> {
+    this.entries.delete(chatId);
+  }
 }
