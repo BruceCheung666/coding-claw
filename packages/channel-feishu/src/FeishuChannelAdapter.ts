@@ -1441,6 +1441,57 @@ function buildResetWorkspaceControlCard(
           content: '请选择新的工作区目录:'
         },
         {
+          tag: 'markdown',
+          content: '如果你需要修改工作区路径或自定义系统提示词，请先填写下方表单再提交。'
+        },
+        {
+          tag: 'form',
+          name: `reset_workspace_form_${chatId}`,
+          elements: [
+            {
+              tag: 'markdown',
+              content: '其他位置: 手动输入绝对路径（可留空）'
+            },
+            {
+              tag: 'input',
+              name: 'manual_workspace_path',
+              placeholder: {
+                tag: 'plain_text',
+                content: '/abs/path/to/workspace'
+              }
+            },
+            {
+              tag: 'markdown',
+              content: '自定义系统提示词: 留空则清空当前设置'
+            },
+            {
+              tag: 'input',
+              name: 'custom_system_prompt',
+              placeholder: {
+                tag: 'plain_text',
+                content: '例如：请始终用中文回复，请先给结论。'
+              },
+              value: options.currentCustomSystemPrompt
+            },
+            {
+              tag: 'button',
+              text: { tag: 'plain_text', content: '应用手动路径与提示词' },
+              type: 'default',
+              name: `submit_reset_workspace_${chatId}`,
+              action_type: 'form_submit',
+              value: {
+                action: 'apply-reset-workspace',
+                chat_id: chatId,
+                workspace_source: 'manual'
+              }
+            }
+          ]
+        },
+        {
+          tag: 'markdown',
+          content: '或者直接使用以下快捷选项:'
+        },
+        {
           tag: 'button',
           type: 'default',
           text: {
@@ -1481,49 +1532,6 @@ function buildResetWorkspaceControlCard(
             chat_id: chatId,
             workspace_source: 'workspace'
           }
-        },
-        {
-          tag: 'form',
-          name: `reset_workspace_form_${chatId}`,
-          elements: [
-            {
-              tag: 'markdown',
-              content: '其他位置: 手动输入绝对路径'
-            },
-            {
-              tag: 'input',
-              name: 'manual_workspace_path',
-              placeholder: {
-                tag: 'plain_text',
-                content: '/abs/path/to/workspace'
-              }
-            },
-            {
-              tag: 'markdown',
-              content: '自定义系统提示词: 留空则清空当前设置'
-            },
-            {
-              tag: 'textarea',
-              name: 'custom_system_prompt',
-              placeholder: {
-                tag: 'plain_text',
-                content: '例如：请始终用中文回复，请先给结论。'
-              },
-              value: options.currentCustomSystemPrompt
-            },
-            {
-              tag: 'button',
-              text: { tag: 'plain_text', content: '应用重置设置' },
-              type: 'default',
-              name: `submit_reset_workspace_${chatId}`,
-              action_type: 'form_submit',
-              value: {
-                action: 'apply-reset-workspace',
-                chat_id: chatId,
-                workspace_source: 'manual'
-              }
-            }
-          ]
         },
         ...(note
           ? [
