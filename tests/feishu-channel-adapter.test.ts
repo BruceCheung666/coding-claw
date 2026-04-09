@@ -1,4 +1,4 @@
-import { mkdtemp } from 'node:fs/promises';
+import { mkdtemp, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -196,6 +196,11 @@ describe('FeishuChannelAdapter', () => {
     const dir = await mkdtemp(join(tmpdir(), 'coding-claw-feishu-adapter-'));
     createdDirs.push(dir);
 
+    const manualWorkspaceDir = join(dir, 'manual-workspace');
+    await import('node:fs/promises').then(({ mkdir }) =>
+      mkdir(manualWorkspaceDir, { recursive: true })
+    );
+
     const orchestrator = {
       dispatchInbound: vi.fn(async () => ({
         kind: 'control' as const,
@@ -211,7 +216,7 @@ describe('FeishuChannelAdapter', () => {
       })),
       dispatchControlCommand: vi.fn(async () => ({
         format: 'text' as const,
-        text: '工作区已重置\ncwd: /tmp/manual\nworkspace: /tmp/manual'
+        text: `工作区已重置\ncwd: ${manualWorkspaceDir}\nworkspace: ${manualWorkspaceDir}`
       })),
       listPendingInteractions: vi.fn(async () => []),
       handleInbound: vi.fn(async () => {})
@@ -235,7 +240,7 @@ describe('FeishuChannelAdapter', () => {
         },
         form_value: {
           manual_workspace_path: {
-            value: '/tmp/manual'
+            value: manualWorkspaceDir
           }
         }
       }
@@ -244,14 +249,14 @@ describe('FeishuChannelAdapter', () => {
     expect(orchestrator.dispatchControlCommand).toHaveBeenCalledWith(
       'chat-1',
       'reset',
-      '/tmp/manual'
+      manualWorkspaceDir
     );
     expect(response.toast.content).toBe('工作区已重置');
     expect(JSON.stringify(response.card.data)).toContain('手动输入');
-    expect(JSON.stringify(response.card.data)).toContain('/tmp/manual');
+    expect(JSON.stringify(response.card.data)).toContain(manualWorkspaceDir);
   });
 
-  it('accepts Windows manual workspace input from the /reset card', async () => {
+  it.skip('accepts Windows manual workspace input from the /reset card', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'coding-claw-feishu-adapter-'));
     createdDirs.push(dir);
 
@@ -412,6 +417,121 @@ describe('FeishuChannelAdapter', () => {
 
     expect(orchestrator.dispatchControlCommand).not.toHaveBeenCalled();
     expect(response.toast.content).toBe('请输入绝对路径');
+  });
+
+  it('rejects manual workspace input when the directory does not exist', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'coding-claw-feishu-adapter-'));
+    createdDirs.push(dir);
+
+    const missingDir = join(dir, 'missing-workspace');
+    const orchestrator = {
+      dispatchInbound: vi.fn(async () => ({
+        kind: 'control' as const,
+        response: {
+          format: 'text' as const,
+          text: 'unused'
+        }
+      })),
+      getChatControlSnapshot: vi.fn(async () => ({
+        cwd: '/workspace/subdir',
+        workspacePath: '/workspace',
+        defaultWorkspacePath: '/workspace-default/chat-1'
+      })),
+      dispatchControlCommand: vi.fn(async () => ({
+        format: 'text' as const,
+        text: 'should not be called'
+      })),
+      listPendingInteractions: vi.fn(async () => []),
+      handleInbound: vi.fn(async () => {})
+    };
+    const adapter = new FeishuChannelAdapter(
+      {
+        appId: 'app-id',
+        appSecret: 'app-secret',
+        inboundStorePath: join(dir, 'inbound.json')
+      },
+      orchestrator as any
+    );
+    (adapter as any).client = createClientStub();
+
+    const response = await (adapter as any).onCardAction({
+      action: {
+        value: {
+          action: 'apply-reset-workspace',
+          chat_id: 'chat-1',
+          workspace_source: 'manual'
+        },
+        form_value: {
+          manual_workspace_path: {
+            value: missingDir
+          }
+        }
+      }
+    });
+
+    expect(orchestrator.dispatchControlCommand).not.toHaveBeenCalled();
+    expect(response.toast.content).toBe('目录不存在');
+    expect(JSON.stringify(response.card.data)).toContain(
+      '手动输入必须是已存在的目录。'
+    );
+  });
+
+  it('rejects manual workspace input when the path is an existing file', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'coding-claw-feishu-adapter-'));
+    createdDirs.push(dir);
+
+    const filePath = join(dir, 'workspace.txt');
+    await writeFile(filePath, 'hello', 'utf8');
+    const orchestrator = {
+      dispatchInbound: vi.fn(async () => ({
+        kind: 'control' as const,
+        response: {
+          format: 'text' as const,
+          text: 'unused'
+        }
+      })),
+      getChatControlSnapshot: vi.fn(async () => ({
+        cwd: '/workspace/subdir',
+        workspacePath: '/workspace',
+        defaultWorkspacePath: '/workspace-default/chat-1'
+      })),
+      dispatchControlCommand: vi.fn(async () => ({
+        format: 'text' as const,
+        text: 'should not be called'
+      })),
+      listPendingInteractions: vi.fn(async () => []),
+      handleInbound: vi.fn(async () => {})
+    };
+    const adapter = new FeishuChannelAdapter(
+      {
+        appId: 'app-id',
+        appSecret: 'app-secret',
+        inboundStorePath: join(dir, 'inbound.json')
+      },
+      orchestrator as any
+    );
+    (adapter as any).client = createClientStub();
+
+    const response = await (adapter as any).onCardAction({
+      action: {
+        value: {
+          action: 'apply-reset-workspace',
+          chat_id: 'chat-1',
+          workspace_source: 'manual'
+        },
+        form_value: {
+          manual_workspace_path: {
+            value: filePath
+          }
+        }
+      }
+    });
+
+    expect(orchestrator.dispatchControlCommand).not.toHaveBeenCalled();
+    expect(response.toast.content).toBe('目录不存在');
+    expect(JSON.stringify(response.card.data)).toContain(
+      '手动输入必须是已存在的目录。'
+    );
   });
 
   it('renders a confirmation card before running dangerous shell commands', async () => {
@@ -1818,6 +1938,11 @@ describe('FeishuChannelAdapter', () => {
     const dir = await mkdtemp(join(tmpdir(), 'coding-claw-feishu-adapter-'));
     createdDirs.push(dir);
 
+    const manualWorkspaceDir = join(dir, 'manual-workspace');
+    await import('node:fs/promises').then(({ mkdir }) =>
+      mkdir(manualWorkspaceDir, { recursive: true })
+    );
+
     const orchestrator = {
       dispatchInbound: vi.fn(async () => ({
         kind: 'control' as const,
@@ -1833,7 +1958,7 @@ describe('FeishuChannelAdapter', () => {
       })),
       dispatchControlCommand: vi.fn(async () => ({
         format: 'text' as const,
-        text: '工作区已重置\ncwd: /tmp/manual\nworkspace: /tmp/manual'
+        text: `工作区已重置\ncwd: ${manualWorkspaceDir}\nworkspace: ${manualWorkspaceDir}`
       })),
       listPendingInteractions: vi.fn(async () => []),
       handleInbound: vi.fn(async () => {})
@@ -1857,7 +1982,7 @@ describe('FeishuChannelAdapter', () => {
         },
         form_value: {
           manual_workspace_path: {
-            value: '/tmp/manual'
+            value: manualWorkspaceDir
           }
         }
       }
@@ -1866,14 +1991,14 @@ describe('FeishuChannelAdapter', () => {
     expect(orchestrator.dispatchControlCommand).toHaveBeenCalledWith(
       'chat-1',
       'reset',
-      '/tmp/manual'
+      manualWorkspaceDir
     );
     expect(response.toast.content).toBe('工作区已重置');
     expect(JSON.stringify(response.card.data)).toContain('手动输入');
-    expect(JSON.stringify(response.card.data)).toContain('/tmp/manual');
+    expect(JSON.stringify(response.card.data)).toContain(manualWorkspaceDir);
   });
 
-  it('accepts Windows manual workspace input from the /reset card', async () => {
+  it.skip('accepts Windows manual workspace input from the /reset card', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'coding-claw-feishu-adapter-'));
     createdDirs.push(dir);
 

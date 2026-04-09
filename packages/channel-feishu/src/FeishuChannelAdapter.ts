@@ -1,3 +1,4 @@
+import { statSync } from 'node:fs';
 import * as lark from '@larksuiteoapi/node-sdk';
 import { randomUUID } from 'node:crypto';
 import {
@@ -1000,6 +1001,24 @@ export class FeishuChannelAdapter implements SessionContextProvider {
       };
     }
 
+    if (workspaceSource === 'manual' && !isExistingDirectory(workspacePath)) {
+      return {
+        toast: {
+          type: 'warning',
+          content: '目录不存在'
+        },
+        card: {
+          type: 'raw',
+          data: buildResetWorkspaceControlCard(
+            chatId,
+            resetOptions,
+            '手动输入必须是已存在的目录。',
+            true
+          )
+        }
+      };
+    }
+
     try {
       const response = await this.orchestrator.dispatchControlCommand(
         chatId,
@@ -1215,6 +1234,14 @@ export class FeishuChannelAdapter implements SessionContextProvider {
     } catch {
       return undefined;
     }
+  }
+}
+
+function isExistingDirectory(path: string): boolean {
+  try {
+    return statSync(path).isDirectory();
+  } catch {
+    return false;
   }
 }
 
