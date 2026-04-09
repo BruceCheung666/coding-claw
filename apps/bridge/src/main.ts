@@ -9,6 +9,7 @@ import {
   FileWorkspaceBindingStore,
   SessionPathResolver
 } from '@coding-claw/core';
+import type { SessionContextProvider } from '@coding-claw/core';
 import { FeishuChannelAdapter } from '@coding-claw/channel-feishu';
 import { ClaudeAgentRuntime } from '@coding-claw/runtime-claude';
 import { LocalShellExecutor } from './LocalShellExecutor.js';
@@ -95,6 +96,13 @@ async function main(): Promise<void> {
   });
   const sessionResolver = new SessionPathResolver(config.session.rootPath);
 
+  const adapterRef: { current?: FeishuChannelAdapter } = {};
+  const sessionContextProvider: SessionContextProvider = {
+    async getSessionMetadata(chatId) {
+      return (await adapterRef.current?.getSessionMetadata(chatId)) ?? {};
+    }
+  };
+
   const orchestrator = new BridgeOrchestrator({
     runtime,
     approvals: new FileApprovalStore(sessionResolver),
@@ -104,11 +112,12 @@ async function main(): Promise<void> {
       shellPath: config.runtime.shellPath
     }),
     transcripts: new FileTranscriptStore(sessionResolver),
-    workspaceRoot: config.runtime.workspaceRoot
+    workspaceRoot: config.runtime.workspaceRoot,
+    sessionContextProvider
   });
 
-  const adapter = new FeishuChannelAdapter(config.feishu, orchestrator);
-  await adapter.start();
+  adapterRef.current = new FeishuChannelAdapter(config.feishu, orchestrator);
+  await adapterRef.current.start();
 
   logDebug('[coding-claw] Feishu bridge started');
 }

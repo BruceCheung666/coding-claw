@@ -2,6 +2,10 @@ import { mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import {
+  FEISHU_CHAT_ANNOUNCEMENT_METADATA_KEY,
+  FEISHU_CHAT_ANNOUNCEMENT_UPDATED_AT_METADATA_KEY
+} from '../packages/core/src/index.js';
 import { FeishuChannelAdapter } from '../packages/channel-feishu/src/FeishuChannelAdapter.js';
 
 const createdDirs: string[] = [];
@@ -18,6 +22,1628 @@ afterEach(async () => {
 });
 
 describe('FeishuChannelAdapter', () => {
+  it('returns from inbound handling before the runtime turn finishes', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'coding-claw-feishu-adapter-'));
+    createdDirs.push(dir);
+
+    const started = createDeferred<void>();
+    const finishTurn = createDeferred<void>();
+    const orchestrator = {
+      dispatchInbound: vi.fn(async (message) => ({
+        kind: 'runtime' as const,
+        message
+      })),
+      dispatchControlCommand: vi.fn(async () => ({
+        format: 'text' as const,
+        text: 'ok'
+      })),
+      listPendingInteractions: vi.fn(async () => []),
+      handleInbound: vi.fn(async () => {
+        started.resolve();
+        await finishTurn.promise;
+      })
+    };
+
+    const adapter = new FeishuChannelAdapter(
+      {
+        appId: 'app-id',
+        appSecret: 'app-secret',
+        inboundStorePath: join(dir, 'inbound.json')
+      },
+      orchestrator as any
+    );
+    (adapter as any).client = createClientStub();
+
+    const markCompleted = vi.fn(async () => {});
+    const markFailed = vi.fn(async () => {});
+    (adapter as any).inboundMessageStore = {
+      reserve: vi.fn(async () => ({
+        action: 'accepted',
+        record: {
+          messageId: 'om_1',
+          chatId: 'chat-1',
+          status: 'processing'
+        }
+      })),
+      markCompleted,
+      markFailed
+    };
+
+    await (adapter as any).onMessage(
+      createTextMessagePayload('om_1', 'chat-1', 'hello')
+    );
+    await started.promise;
+
+    expect(orchestrator.dispatchInbound).toHaveBeenCalledTimes(1);
+    expect(orchestrator.handleInbound).toHaveBeenCalledTimes(1);
+    expect(markCompleted).not.toHaveBeenCalled();
+    expect(markFailed).not.toHaveBeenCalled();
+
+    finishTurn.resolve();
+    await flushMicrotasks();
+
+    expect(markCompleted).toHaveBeenCalledWith('om_1');
+    expect(markFailed).not.toHaveBeenCalled();
+  });
+
+  it('renders /reset as a workspace picker and applies the cwd choice', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'coding-claw-feishu-adapter-'));
+    createdDirs.push(dir);
+
+    const client = createClientStub();
+    const orchestrator = {
+      dispatchInbound: vi.fn(async () => ({
+        kind: 'control' as const,
+        response: {
+          format: 'reset-workspace-picker' as const,
+          options: {
+            defaultWorkspacePath: '/workspace-default/chat-1',
+            currentWorkspacePath: '/workspace',
+            currentCwd: '/workspace/subdir'
+          }
+        }
+      })),
+      getChatControlSnapshot: vi.fn(async () => ({
+        cwd: '/workspace/subdir',
+        workspacePath: '/workspace',
+        defaultWorkspacePath: '/workspace-default/chat-1'
+      })),
+      dispatchControlCommand: vi.fn(async () => ({
+        format: 'text' as const,
+        text: '工作区已重置\ncwd: /workspace/subdir\nworkspace: /workspace/subdir'
+      })),
+      listPendingInteractions: vi.fn(async () => []),
+      handleInbound: vi.fn(async () => {})
+    };
+
+    const adapter = new FeishuChannelAdapter(
+      {
+        appId: 'app-id',
+        appSecret: 'app-secret',
+        inboundStorePath: join(dir, 'inbound.json')
+      },
+      orchestrator as any
+    );
+    (adapter as any).client = client;
+
+    const markCompleted = vi.fn(async () => {});
+    const markFailed = vi.fn(async () => {});
+    (adapter as any).inboundMessageStore = {
+      reserve: vi.fn(async () => ({
+        action: 'accepted',
+        record: {
+          messageId: 'om_sr',
+          chatId: 'chat-1',
+          status: 'processing'
+        }
+      })),
+      markCompleted,
+      markFailed
+    };
+
+    await (adapter as any).onMessage(
+      createTextMessagePayload('om_sr', 'chat-1', '/reset')
+    );
+    await flushMicrotasks();
+
+    expect(orchestrator.dispatchInbound).toHaveBeenCalledTimes(1);
+    expect(orchestrator.dispatchControlCommand).not.toHaveBeenCalled();
+    expect(client.im.message.reply).toHaveBeenCalledTimes(1);
+    expect(markCompleted).toHaveBeenCalledWith('om_sr');
+    expect(markFailed).not.toHaveBeenCalled();
+
+    const resetContent = JSON.parse(
+      client.im.message.reply.mock.calls[0]![0].data.content
+    ) as Record<string, unknown>;
+    expect(
+      (resetContent.header as { template?: string } | undefined)?.template
+    ).toBe('blue');
+    expect(JSON.stringify(resetContent)).toContain(
+      '默认位置: `/workspace-default/chat-1`'
+    );
+    expect(JSON.stringify(resetContent)).toContain(
+      '当前 cwd: `/workspace/subdir`'
+    );
+    expect(JSON.stringify(resetContent)).toContain(
+      '当前 workspace: `/workspace`'
+    );
+    expect(JSON.stringify(resetContent)).toContain('使用当前 workspace');
+
+    const response = await (adapter as any).onCardAction({
+      action: {
+        value: {
+          action: 'apply-reset-workspace',
+          chat_id: 'chat-1',
+          workspace_source: 'cwd'
+        }
+      }
+    });
+
+    expect(orchestrator.dispatchControlCommand).toHaveBeenCalledWith(
+      'chat-1',
+      'reset',
+      '/workspace/subdir'
+    );
+    expect(response.toast.content).toBe('工作区已重置');
+    expect(response.card.data.header.template).toBe('green');
+    expect(JSON.stringify(response.card.data)).toContain(
+      'cwd: /workspace/subdir'
+    );
+    expect(JSON.stringify(response.card.data)).toContain('/workspace/subdir');
+  });
+
+  it('accepts manual workspace input from the /reset card', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'coding-claw-feishu-adapter-'));
+    createdDirs.push(dir);
+
+    const orchestrator = {
+      dispatchInbound: vi.fn(async () => ({
+        kind: 'control' as const,
+        response: {
+          format: 'text' as const,
+          text: 'unused'
+        }
+      })),
+      getChatControlSnapshot: vi.fn(async () => ({
+        cwd: '/workspace/subdir',
+        workspacePath: '/workspace',
+        defaultWorkspacePath: '/workspace-default/chat-1'
+      })),
+      dispatchControlCommand: vi.fn(async () => ({
+        format: 'text' as const,
+        text: '工作区已重置\ncwd: /tmp/manual\nworkspace: /tmp/manual'
+      })),
+      listPendingInteractions: vi.fn(async () => []),
+      handleInbound: vi.fn(async () => {})
+    };
+    const adapter = new FeishuChannelAdapter(
+      {
+        appId: 'app-id',
+        appSecret: 'app-secret',
+        inboundStorePath: join(dir, 'inbound.json')
+      },
+      orchestrator as any
+    );
+    (adapter as any).client = createClientStub();
+
+    const response = await (adapter as any).onCardAction({
+      action: {
+        value: {
+          action: 'apply-reset-workspace',
+          chat_id: 'chat-1',
+          workspace_source: 'manual'
+        },
+        form_value: {
+          manual_workspace_path: {
+            value: '/tmp/manual'
+          }
+        }
+      }
+    });
+
+    expect(orchestrator.dispatchControlCommand).toHaveBeenCalledWith(
+      'chat-1',
+      'reset',
+      '/tmp/manual'
+    );
+    expect(response.toast.content).toBe('工作区已重置');
+    expect(JSON.stringify(response.card.data)).toContain('手动输入');
+    expect(JSON.stringify(response.card.data)).toContain('/tmp/manual');
+  });
+
+  it('accepts Windows manual workspace input from the /reset card', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'coding-claw-feishu-adapter-'));
+    createdDirs.push(dir);
+
+    const orchestrator = {
+      dispatchInbound: vi.fn(async () => ({
+        kind: 'control' as const,
+        response: {
+          format: 'text' as const,
+          text: 'unused'
+        }
+      })),
+      getChatControlSnapshot: vi.fn(async () => ({
+        cwd: '/workspace/subdir',
+        workspacePath: '/workspace',
+        defaultWorkspacePath: '/workspace-default/chat-1'
+      })),
+      dispatchControlCommand: vi.fn(async () => ({
+        format: 'text' as const,
+        text: '工作区已重置\ncwd: C:\\workspace\\manual\nworkspace: C:\\workspace\\manual'
+      })),
+      listPendingInteractions: vi.fn(async () => []),
+      handleInbound: vi.fn(async () => {})
+    };
+    const adapter = new FeishuChannelAdapter(
+      {
+        appId: 'app-id',
+        appSecret: 'app-secret',
+        inboundStorePath: join(dir, 'inbound.json')
+      },
+      orchestrator as any
+    );
+    (adapter as any).client = createClientStub();
+
+    const response = await (adapter as any).onCardAction({
+      action: {
+        value: {
+          action: 'apply-reset-workspace',
+          chat_id: 'chat-1',
+          workspace_source: 'manual'
+        },
+        form_value: {
+          manual_workspace_path: {
+            value: 'C:\\workspace\\manual'
+          }
+        }
+      }
+    });
+
+    expect(orchestrator.dispatchControlCommand).toHaveBeenCalledWith(
+      'chat-1',
+      'reset',
+      'C:\\workspace\\manual'
+    );
+    expect(response.toast.content).toBe('工作区已重置');
+  });
+
+  it('rejects empty manual workspace input from the /reset card', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'coding-claw-feishu-adapter-'));
+    createdDirs.push(dir);
+
+    const orchestrator = {
+      dispatchInbound: vi.fn(async () => ({
+        kind: 'control' as const,
+        response: {
+          format: 'text' as const,
+          text: 'unused'
+        }
+      })),
+      getChatControlSnapshot: vi.fn(async () => ({
+        cwd: '/workspace/subdir',
+        workspacePath: '/workspace',
+        defaultWorkspacePath: '/workspace-default/chat-1'
+      })),
+      dispatchControlCommand: vi.fn(async () => ({
+        format: 'text' as const,
+        text: 'should not be called'
+      })),
+      listPendingInteractions: vi.fn(async () => []),
+      handleInbound: vi.fn(async () => {})
+    };
+    const adapter = new FeishuChannelAdapter(
+      {
+        appId: 'app-id',
+        appSecret: 'app-secret',
+        inboundStorePath: join(dir, 'inbound.json')
+      },
+      orchestrator as any
+    );
+    (adapter as any).client = createClientStub();
+
+    const response = await (adapter as any).onCardAction({
+      action: {
+        value: {
+          action: 'apply-reset-workspace',
+          chat_id: 'chat-1',
+          workspace_source: 'manual'
+        },
+        form_value: {
+          manual_workspace_path: {
+            value: '   '
+          }
+        }
+      }
+    });
+
+    expect(orchestrator.dispatchControlCommand).not.toHaveBeenCalled();
+    expect(response.toast.content).toBe('请输入工作区路径');
+  });
+
+  it('rejects relative manual workspace input from the /reset card', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'coding-claw-feishu-adapter-'));
+    createdDirs.push(dir);
+
+    const orchestrator = {
+      dispatchInbound: vi.fn(async () => ({
+        kind: 'control' as const,
+        response: {
+          format: 'text' as const,
+          text: 'unused'
+        }
+      })),
+      getChatControlSnapshot: vi.fn(async () => ({
+        cwd: '/workspace/subdir',
+        workspacePath: '/workspace',
+        defaultWorkspacePath: '/workspace-default/chat-1'
+      })),
+      dispatchControlCommand: vi.fn(async () => ({
+        format: 'text' as const,
+        text: 'should not be called'
+      })),
+      listPendingInteractions: vi.fn(async () => []),
+      handleInbound: vi.fn(async () => {})
+    };
+    const adapter = new FeishuChannelAdapter(
+      {
+        appId: 'app-id',
+        appSecret: 'app-secret',
+        inboundStorePath: join(dir, 'inbound.json')
+      },
+      orchestrator as any
+    );
+    (adapter as any).client = createClientStub();
+
+    const response = await (adapter as any).onCardAction({
+      action: {
+        value: {
+          action: 'apply-reset-workspace',
+          chat_id: 'chat-1',
+          workspace_source: 'manual'
+        },
+        form_value: {
+          manual_workspace_path: {
+            value: 'relative/path'
+          }
+        }
+      }
+    });
+
+    expect(orchestrator.dispatchControlCommand).not.toHaveBeenCalled();
+    expect(response.toast.content).toBe('请输入绝对路径');
+  });
+
+  it('renders a confirmation card before running dangerous shell commands', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'coding-claw-feishu-adapter-'));
+    createdDirs.push(dir);
+
+    const client = createClientStub();
+    const orchestrator = {
+      dispatchInbound: vi.fn(async () => ({
+        kind: 'runtime' as const,
+        message: null
+      })),
+      dispatchControlCommand: vi.fn(async () => ({
+        format: 'text' as const,
+        text: 'unused'
+      })),
+      getChatControlSnapshot: vi.fn(async () => ({
+        cwd: '/workspace',
+        workspacePath: '/workspace',
+        defaultWorkspacePath: '/workspace-default/chat-1'
+      })),
+      listPendingInteractions: vi.fn(async () => []),
+      handleInbound: vi.fn(async () => {})
+    };
+
+    const adapter = new FeishuChannelAdapter(
+      {
+        appId: 'app-id',
+        appSecret: 'app-secret',
+        inboundStorePath: join(dir, 'inbound.json')
+      },
+      orchestrator as any
+    );
+    (adapter as any).client = client;
+
+    const markCompleted = vi.fn(async () => {});
+    const markFailed = vi.fn(async () => {});
+    (adapter as any).inboundMessageStore = {
+      reserve: vi.fn(async () => ({
+        action: 'accepted',
+        record: {
+          messageId: 'om_sx',
+          chatId: 'chat-1',
+          status: 'processing'
+        }
+      })),
+      markCompleted,
+      markFailed
+    };
+
+    await (adapter as any).onMessage(
+      createTextMessagePayload('om_sx', 'chat-1', '/sx rm -rf *')
+    );
+    await flushMicrotasks();
+
+    expect(client.im.message.reply).toHaveBeenCalledTimes(1);
+    const card = JSON.parse(
+      client.im.message.reply.mock.calls[0]![0].data.content
+    ) as Record<string, unknown>;
+    expect(JSON.stringify(card)).toContain('高风险命令确认');
+    expect(JSON.stringify(card)).toContain('/sx rm -rf *');
+    expect(markCompleted).toHaveBeenCalledWith('om_sx');
+    expect(markFailed).not.toHaveBeenCalled();
+  });
+
+  it('executes a confirmed dangerous shell command through the orchestrator', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'coding-claw-feishu-adapter-'));
+    createdDirs.push(dir);
+
+    const client = createClientStub();
+    const orchestrator = {
+      dispatchInbound: vi.fn(async () => ({
+        kind: 'runtime' as const,
+        message: null
+      })),
+      dispatchControlCommand: vi.fn(async () => ({
+        format: 'text' as const,
+        text: 'pwd\n/workspace'
+      })),
+      getChatControlSnapshot: vi.fn(async () => ({
+        cwd: '/workspace',
+        workspacePath: '/workspace',
+        defaultWorkspacePath: '/workspace-default/chat-1'
+      })),
+      listPendingInteractions: vi.fn(async () => []),
+      handleInbound: vi.fn(async () => {})
+    };
+
+    const adapter = new FeishuChannelAdapter(
+      {
+        appId: 'app-id',
+        appSecret: 'app-secret',
+        inboundStorePath: join(dir, 'inbound.json')
+      },
+      orchestrator as any
+    );
+    (adapter as any).client = client;
+
+    const record = {
+      interactionId: 'danger-1',
+      chatId: 'chat-1',
+      originalMessageId: 'om_pwd',
+      commandId: 'shell.exec' as const,
+      argsText: 'pwd',
+      commandText: '/sx pwd',
+      title: '高风险命令确认',
+      description: '确认后将执行 shell 命令。',
+      cwd: '/workspace'
+    };
+    (adapter as any).pendingControlConfirmations.set('danger-1', record);
+
+    const response = await (adapter as any).onCardAction({
+      action: {
+        value: {
+          action: 'confirm-control-command',
+          interaction_id: 'danger-1'
+        }
+      }
+    });
+
+    expect(orchestrator.dispatchControlCommand).toHaveBeenCalledWith(
+      'chat-1',
+      'shell.exec',
+      'pwd'
+    );
+    expect(response.toast.content).toBe('已确认并执行');
+    expect(JSON.stringify(response.card.data)).toContain('/workspace');
+  });
+
+  it('runs safe shell commands without a confirmation card', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'coding-claw-feishu-adapter-'));
+    createdDirs.push(dir);
+
+    const orchestrator = {
+      dispatchInbound: vi.fn(async () => ({
+        kind: 'control' as const,
+        response: {
+          format: 'text' as const,
+          text: '/workspace'
+        }
+      })),
+      dispatchControlCommand: vi.fn(async () => ({
+        format: 'text' as const,
+        text: '/workspace'
+      })),
+      listPendingInteractions: vi.fn(async () => []),
+      handleInbound: vi.fn(async () => {})
+    };
+    const adapter = new FeishuChannelAdapter(
+      {
+        appId: 'app-id',
+        appSecret: 'app-secret',
+        inboundStorePath: join(dir, 'inbound.json')
+      },
+      orchestrator as any
+    );
+    const client = createClientStub();
+    (adapter as any).client = client;
+
+    const markCompleted = vi.fn(async () => {});
+    const markFailed = vi.fn(async () => {});
+    (adapter as any).inboundMessageStore = {
+      reserve: vi.fn(async () => ({
+        action: 'accepted',
+        record: {
+          messageId: 'om_pwd',
+          chatId: 'chat-1',
+          status: 'processing'
+        }
+      })),
+      markCompleted,
+      markFailed
+    };
+
+    await (adapter as any).onMessage(
+      createTextMessagePayload('om_pwd', 'chat-1', '/sx pwd')
+    );
+    await flushMicrotasks();
+
+    expect(orchestrator.dispatchInbound).toHaveBeenCalledTimes(1);
+    expect(client.im.message.reply).toHaveBeenCalledTimes(1);
+    expect(markCompleted).toHaveBeenCalledWith('om_pwd');
+    expect(markFailed).not.toHaveBeenCalled();
+  });
+
+  it('shows a queue-or-inject card when a runtime turn is already running', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'coding-claw-feishu-adapter-'));
+    createdDirs.push(dir);
+
+    const client = createClientStub();
+    const orchestrator = {
+      dispatchInbound: vi.fn(async (message) => ({
+        kind: 'runtime' as const,
+        message
+      })),
+      dispatchControlCommand: vi.fn(async () => ({
+        format: 'text' as const,
+        text: 'unused'
+      })),
+      listPendingInteractions: vi.fn(async () => []),
+      getChatExecutionSnapshot: vi.fn(() => ({
+        running: true,
+        willQueue: true,
+        sessionId: 'session-1'
+      })),
+      handleInbound: vi.fn(async () => {})
+    };
+
+    const adapter = new FeishuChannelAdapter(
+      {
+        appId: 'app-id',
+        appSecret: 'app-secret',
+        inboundStorePath: join(dir, 'inbound.json')
+      },
+      orchestrator as any
+    );
+    (adapter as any).client = client;
+
+    const markCompleted = vi.fn(async () => {});
+    const markFailed = vi.fn(async () => {});
+    (adapter as any).inboundMessageStore = {
+      reserve: vi.fn(async () => ({
+        action: 'accepted',
+        record: {
+          messageId: 'om_queue_prompt',
+          chatId: 'chat-1',
+          status: 'processing'
+        }
+      })),
+      markCompleted,
+      markFailed
+    };
+
+    await (adapter as any).onMessage(
+      createTextMessagePayload('om_queue_prompt', 'chat-1', '补充一个 README')
+    );
+    await flushMicrotasks();
+
+    expect(client.im.message.reply).toHaveBeenCalledTimes(1);
+    const card = JSON.parse(
+      client.im.message.reply.mock.calls[0]![0].data.content
+    ) as Record<string, unknown>;
+    expect(JSON.stringify(card)).toContain('当前会话正在执行');
+    expect(markCompleted).toHaveBeenCalledWith('om_queue_prompt');
+    expect(markFailed).not.toHaveBeenCalled();
+  });
+
+  it('queues a runtime message when selected from the routing card', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'coding-claw-feishu-adapter-'));
+    createdDirs.push(dir);
+
+    const client = createClientStub();
+    const runRuntimeTurn = vi.fn(async () => {});
+    const orchestrator = {
+      dispatchInbound: vi.fn(async (message) => ({
+        kind: 'runtime' as const,
+        message
+      })),
+      dispatchControlCommand: vi.fn(async () => ({
+        format: 'text' as const,
+        text: 'unused'
+      })),
+      listPendingInteractions: vi.fn(async () => []),
+      getChatExecutionSnapshot: vi.fn(() => ({
+        running: true,
+        willQueue: true,
+        sessionId: 'session-1'
+      })),
+      handleInbound: vi.fn(async () => {})
+    };
+
+    const adapter = new FeishuChannelAdapter(
+      {
+        appId: 'app-id',
+        appSecret: 'app-secret',
+        inboundStorePath: join(dir, 'inbound.json')
+      },
+      orchestrator as any
+    );
+    (adapter as any).client = client;
+    (adapter as any).runRuntimeTurn = runRuntimeTurn;
+
+    const record = {
+      interactionId: 'route-1',
+      message: {
+        channel: 'feishu' as const,
+        chatId: 'chat-1',
+        messageId: 'om_queue_select',
+        text: '继续补测试'
+      }
+    };
+    (adapter as any).pendingRuntimeRoutingDecisions.set('route-1', record);
+
+    const response = await (adapter as any).onCardAction({
+      action: {
+        value: {
+          action: 'queue-runtime-message',
+          interaction_id: 'route-1'
+        }
+      }
+    });
+    await flushMicrotasks();
+
+    expect(runRuntimeTurn).toHaveBeenCalledWith(record.message);
+    expect(response.toast.content).toBe('已加入队列');
+  });
+
+  it('injects a runtime message into the current turn when selected from the routing card', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'coding-claw-feishu-adapter-'));
+    createdDirs.push(dir);
+
+    const client = createClientStub();
+    const orchestrator = {
+      dispatchInbound: vi.fn(async (message) => ({
+        kind: 'runtime' as const,
+        message
+      })),
+      dispatchControlCommand: vi.fn(async () => ({
+        format: 'text' as const,
+        text: 'unused'
+      })),
+      listPendingInteractions: vi.fn(async () => []),
+      injectIntoRunningTurn: vi.fn(async () => {}),
+      getChatExecutionSnapshot: vi.fn(() => ({
+        running: true,
+        willQueue: true,
+        sessionId: 'session-1'
+      })),
+      handleInbound: vi.fn(async () => {})
+    };
+
+    const adapter = new FeishuChannelAdapter(
+      {
+        appId: 'app-id',
+        appSecret: 'app-secret',
+        inboundStorePath: join(dir, 'inbound.json')
+      },
+      orchestrator as any
+    );
+    (adapter as any).client = client;
+
+    const record = {
+      interactionId: 'route-2',
+      message: {
+        channel: 'feishu' as const,
+        chatId: 'chat-1',
+        messageId: 'om_queue_select',
+        text: '继续补测试'
+      }
+    };
+    (adapter as any).pendingRuntimeRoutingDecisions.set('route-2', record);
+
+    const response = await (adapter as any).onCardAction({
+      action: {
+        value: {
+          action: 'inject-runtime-message',
+          interaction_id: 'route-2'
+        }
+      }
+    });
+
+    expect(orchestrator.injectIntoRunningTurn).toHaveBeenCalledWith(
+      'chat-1',
+      '继续补测试'
+    );
+    expect(response.toast.content).toBe('已注入当前会话');
+  });
+
+  it('surfaces an injection failure in the routing card', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'coding-claw-feishu-adapter-'));
+    createdDirs.push(dir);
+
+    const client = createClientStub();
+    const orchestrator = {
+      dispatchInbound: vi.fn(async (message) => ({
+        kind: 'runtime' as const,
+        message
+      })),
+      dispatchControlCommand: vi.fn(async () => ({
+        format: 'text' as const,
+        text: 'unused'
+      })),
+      listPendingInteractions: vi.fn(async () => []),
+      injectIntoRunningTurn: vi.fn(async () => {
+        throw new Error('cannot inject now');
+      }),
+      getChatExecutionSnapshot: vi.fn(() => ({
+        running: true,
+        willQueue: true,
+        sessionId: 'session-1'
+      })),
+      handleInbound: vi.fn(async () => {})
+    };
+
+    const adapter = new FeishuChannelAdapter(
+      {
+        appId: 'app-id',
+        appSecret: 'app-secret',
+        inboundStorePath: join(dir, 'inbound.json')
+      },
+      orchestrator as any
+    );
+    (adapter as any).client = client;
+
+    const record = {
+      interactionId: 'route-3',
+      message: {
+        channel: 'feishu' as const,
+        chatId: 'chat-1',
+        messageId: 'om_queue_select',
+        text: '继续补测试'
+      }
+    };
+    (adapter as any).pendingRuntimeRoutingDecisions.set('route-3', record);
+
+    const response = await (adapter as any).onCardAction({
+      action: {
+        value: {
+          action: 'inject-runtime-message',
+          interaction_id: 'route-3'
+        }
+      }
+    });
+
+    expect(response.toast.content).toBe('注入失败');
+    expect(JSON.stringify(response.card.data)).toContain('cannot inject now');
+  });
+
+  it('converts repeated start confirmations into supplemental requirements', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'coding-claw-feishu-adapter-'));
+    createdDirs.push(dir);
+
+    const client = createClientStub();
+    const startConfirmation = {
+      kind: 'question' as const,
+      id: 'start-confirm-1',
+      createdAt: new Date('2026-04-03T00:00:00Z').toISOString(),
+      questions: [
+        {
+          id: 'q_0',
+          header: '开始确认',
+          question: '确认开始实现？',
+          options: []
+        }
+      ]
+    };
+    const orchestrator = {
+      dispatchInbound: vi.fn(async (message) => ({
+        kind: 'runtime' as const,
+        message
+      })),
+      dispatchControlCommand: vi.fn(async () => ({
+        format: 'text' as const,
+        text: 'unused'
+      })),
+      listPendingInteractions: vi.fn(async () => [startConfirmation]),
+      handleInbound: vi.fn(async () => {}),
+      resolveInteractionById: vi.fn(async () => ({
+        chatId: 'chat-1',
+        interaction: startConfirmation,
+        resolution: {
+          kind: 'question' as const,
+          answers: { q_0: '补充一些边界条件' }
+        }
+      }))
+    };
+
+    const adapter = new FeishuChannelAdapter(
+      {
+        appId: 'app-id',
+        appSecret: 'app-secret',
+        inboundStorePath: join(dir, 'inbound.json')
+      },
+      orchestrator as any
+    );
+    (adapter as any).client = client;
+    (adapter as any).interactionMessages.set('start-confirm-1', {
+      chatId: 'chat-1',
+      messageId: 'reply-1',
+      interaction: startConfirmation
+    });
+
+    const markCompleted = vi.fn(async () => {});
+    const markFailed = vi.fn(async () => {});
+    (adapter as any).inboundMessageStore = {
+      reserve: vi.fn(async () => ({
+        action: 'accepted',
+        record: {
+          messageId: 'om_repeat_start',
+          chatId: 'chat-1',
+          status: 'processing'
+        }
+      })),
+      markCompleted,
+      markFailed
+    };
+
+    await (adapter as any).onMessage(
+      createTextMessagePayload('om_repeat_start', 'chat-1', '补充一些边界条件')
+    );
+    await flushMicrotasks();
+
+    expect(orchestrator.handleInbound).not.toHaveBeenCalled();
+    expect(orchestrator.resolveInteractionById).toHaveBeenCalledTimes(1);
+    expect(client.im.message.update).toHaveBeenCalledTimes(1);
+    expect(markCompleted).toHaveBeenCalledWith('om_repeat_start');
+    expect(markFailed).not.toHaveBeenCalled();
+  });
+
+  it('ignores message.read events for runtime routing', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'coding-claw-feishu-adapter-'));
+    createdDirs.push(dir);
+
+    const orchestrator = {
+      dispatchInbound: vi.fn(async () => ({
+        kind: 'runtime' as const,
+        message: null
+      })),
+      dispatchControlCommand: vi.fn(async () => ({
+        format: 'text' as const,
+        text: 'unused'
+      })),
+      listPendingInteractions: vi.fn(async () => []),
+      handleInbound: vi.fn(async () => {})
+    };
+
+    const adapter = new FeishuChannelAdapter(
+      {
+        appId: 'app-id',
+        appSecret: 'app-secret',
+        inboundStorePath: join(dir, 'inbound.json')
+      },
+      orchestrator as any
+    );
+    (adapter as any).client = createClientStub();
+
+    await (adapter as any).onMessageRead({
+      event_type: 'im.message.message_read_v1',
+      reader: {
+        reader_id: {
+          open_id: 'ou_1'
+        },
+        read_time: '1775201903173'
+      },
+      message_id_list: ['om_bot_1']
+    });
+
+    expect(orchestrator.dispatchInbound).not.toHaveBeenCalled();
+    expect(orchestrator.handleInbound).not.toHaveBeenCalled();
+    expect(orchestrator.dispatchControlCommand).not.toHaveBeenCalled();
+  });
+
+  it('returns a completed question card with 已回答 title', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'coding-claw-feishu-adapter-'));
+    createdDirs.push(dir);
+
+    const client = createClientStub();
+    const orchestrator = {
+      dispatchInbound: vi.fn(async () => ({
+        kind: 'runtime' as const,
+        message: null
+      })),
+      dispatchControlCommand: vi.fn(async () => ({
+        format: 'text' as const,
+        text: 'unused'
+      })),
+      listPendingInteractions: vi.fn(async () => []),
+      handleInbound: vi.fn(async () => {}),
+      resolveInteractionById: vi.fn(
+        async (interactionId: string, resolution: unknown) => ({
+          chatId: 'chat-1',
+          interaction: {
+            kind: 'question' as const,
+            id: interactionId,
+            createdAt: new Date('2026-04-03T00:00:00Z').toISOString(),
+            questions: [
+              {
+                id: 'frontend',
+                header: '前端框架',
+                question: '技术栈偏好？',
+                options: [
+                  {
+                    label: 'React + TypeScript',
+                    description: '主流选择'
+                  }
+                ]
+              }
+            ]
+          },
+          resolution
+        })
+      )
+    };
+
+    const adapter = new FeishuChannelAdapter(
+      {
+        appId: 'app-id',
+        appSecret: 'app-secret',
+        inboundStorePath: join(dir, 'inbound.json')
+      },
+      orchestrator as any
+    );
+    (adapter as any).client = client;
+
+    const response = await (adapter as any).onCardAction({
+      action: {
+        value: {
+          action: 'submit-question',
+          interaction_id: 'question-1'
+        },
+        form_value: {
+          choice_frontend: 'choice:React + TypeScript'
+        }
+      }
+    });
+
+    expect(orchestrator.resolveInteractionById).toHaveBeenCalledTimes(1);
+    expect(response.card.data.header.title.content).toBe('已回答');
+    expect(JSON.stringify(response.card.data)).toContain('React + TypeScript');
+    expect(JSON.stringify(response.card.data)).not.toContain('需要你的回答');
+  });
+
+  it('returns approved permission cards with a grey header', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'coding-claw-feishu-adapter-'));
+    createdDirs.push(dir);
+
+    const client = createClientStub();
+    const orchestrator = {
+      dispatchInbound: vi.fn(async () => ({
+        kind: 'runtime' as const,
+        message: null
+      })),
+      dispatchControlCommand: vi.fn(async () => ({
+        format: 'text' as const,
+        text: 'unused'
+      })),
+      listPendingInteractions: vi.fn(async () => []),
+      handleInbound: vi.fn(async () => {}),
+      resolveInteractionById: vi.fn(
+        async (interactionId: string, resolution: unknown) => ({
+          chatId: 'chat-1',
+          interaction: {
+            kind: 'permission' as const,
+            id: interactionId,
+            createdAt: new Date('2026-04-03T00:00:00Z').toISOString(),
+            toolName: 'Bash',
+            toolInput: {
+              command: 'pnpm test'
+            },
+            suggestions: []
+          },
+          resolution
+        })
+      )
+    };
+
+    const adapter = new FeishuChannelAdapter(
+      {
+        appId: 'app-id',
+        appSecret: 'app-secret',
+        inboundStorePath: join(dir, 'inbound.json')
+      },
+      orchestrator as any
+    );
+    (adapter as any).client = client;
+
+    const response = await (adapter as any).onCardAction({
+      action: {
+        value: {
+          action: 'accept-once',
+          interaction_id: 'permission-1'
+        }
+      }
+    });
+
+    expect(orchestrator.resolveInteractionById).toHaveBeenCalledTimes(1);
+    expect(response.card.data.header.title.content).toBe('✅ 已批准');
+    expect(response.card.data.header.template).toBe('grey');
+  });
+
+  it('switches agent mode from a control card action', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'coding-claw-feishu-adapter-'));
+    createdDirs.push(dir);
+
+    const client = createClientStub();
+    const orchestrator = {
+      dispatchInbound: vi.fn(async () => ({
+        kind: 'runtime' as const,
+        message: null
+      })),
+      dispatchControlCommand: vi.fn(
+        async (_chatId: string, _commandId: string, argsText: string) => ({
+          format: 'text' as const,
+          text: `Agent 权限模式已切换\nmode: ${argsText}\nsession: preserved\ntakesEffect: next-turn`
+        })
+      ),
+      listPendingInteractions: vi.fn(async () => []),
+      handleInbound: vi.fn(async () => {}),
+      resolveInteractionById: vi.fn(async () => undefined)
+    };
+
+    const adapter = new FeishuChannelAdapter(
+      {
+        appId: 'app-id',
+        appSecret: 'app-secret',
+        inboundStorePath: join(dir, 'inbound.json')
+      },
+      orchestrator as any
+    );
+    (adapter as any).client = client;
+
+    const response = await (adapter as any).onCardAction({
+      action: {
+        value: {
+          action: 'set-agent-mode',
+          chat_id: 'chat-1',
+          mode: 'dontAsk'
+        }
+      }
+    });
+
+    expect(orchestrator.dispatchControlCommand).toHaveBeenCalledWith(
+      'chat-1',
+      'agent.mode',
+      'dontAsk'
+    );
+    expect(response.toast.content).toBe('权限模式已切换');
+    expect(response.card.data.header.template).toBe('green');
+    expect(response.card.data.header.title.content).toBe(
+      '✅ Agent 权限模式已切换'
+    );
+    expect(JSON.stringify(response.card.data)).toContain(
+      '当前模式: **dontAsk**'
+    );
+    expect(JSON.stringify(response.card.data)).toContain(
+      'takesEffect: next-turn'
+    );
+    expect(JSON.stringify(response.card.data)).not.toContain('set-agent-mode');
+  });
+
+  it('switches agent model from a control card action', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'coding-claw-feishu-adapter-'));
+    createdDirs.push(dir);
+
+    const client = createClientStub();
+    const orchestrator = {
+      dispatchInbound: vi.fn(async () => ({
+        kind: 'runtime' as const,
+        message: null
+      })),
+      dispatchControlCommand: vi.fn(async () => undefined),
+      listPendingInteractions: vi.fn(async () => []),
+      handleInbound: vi.fn(async () => {}),
+      resolveInteractionById: vi.fn(async () => undefined)
+    };
+
+    const adapter = new FeishuChannelAdapter(
+      {
+        appId: 'app-id',
+        appSecret: 'app-secret',
+        inboundStorePath: join(dir, 'inbound.json')
+      },
+      orchestrator as any
+    );
+    (adapter as any).client = client;
+
+    const response = await (adapter as any).onCardAction({
+      action: {
+        value: {
+          action: 'set-agent-model',
+          chat_id: 'chat-1',
+          model: 'sonnet[1m]'
+        }
+      }
+    });
+
+    expect(orchestrator.dispatchControlCommand).toHaveBeenCalledWith(
+      'chat-1',
+      'agent.model',
+      'sonnet[1m]'
+    );
+    expect(response.toast.content).toBe('模型已切换');
+    expect(response.card.data.header.template).toBe('green');
+    expect(response.card.data.header.title.content).toBe('✅ Agent 模型已切换');
+    expect(JSON.stringify(response.card.data)).toContain(
+      'Agent 模型已切换为 **sonnet[1m]**'
+    );
+    expect(JSON.stringify(response.card.data)).toContain('会话已重置');
+    expect(JSON.stringify(response.card.data)).not.toContain('session: reset');
+    expect(JSON.stringify(response.card.data)).not.toContain(
+      'Agent 模型已切换\\n'
+    );
+    expect(JSON.stringify(response.card.data)).not.toContain('set-agent-model');
+  });
+
+  it('returns multi-select answers as arrays when multiple options are chosen', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'coding-claw-feishu-adapter-'));
+    createdDirs.push(dir);
+
+    const client = createClientStub();
+    const orchestrator = {
+      dispatchInbound: vi.fn(async () => ({
+        kind: 'runtime' as const,
+        message: null
+      })),
+      dispatchControlCommand: vi.fn(async () => ({
+        format: 'text' as const,
+        text: 'unused'
+      })),
+      listPendingInteractions: vi.fn(async () => []),
+      handleInbound: vi.fn(async () => {}),
+      resolveInteractionById: vi.fn(
+        async (interactionId: string, resolution: unknown) => ({
+          chatId: 'chat-1',
+          interaction: {
+            kind: 'question' as const,
+            id: interactionId,
+            createdAt: new Date('2026-04-03T00:00:00Z').toISOString(),
+            questions: [
+              {
+                id: 'stack',
+                header: '技术栈',
+                question: '可多选',
+                multiSelect: true,
+                options: [
+                  {
+                    label: 'React',
+                    description: '前端'
+                  },
+                  {
+                    label: 'Node.js',
+                    description: '后端'
+                  }
+                ]
+              }
+            ]
+          },
+          resolution
+        })
+      )
+    };
+
+    const adapter = new FeishuChannelAdapter(
+      {
+        appId: 'app-id',
+        appSecret: 'app-secret',
+        inboundStorePath: join(dir, 'inbound.json')
+      },
+      orchestrator as any
+    );
+    (adapter as any).client = client;
+
+    const response = await (adapter as any).onCardAction({
+      action: {
+        value: {
+          action: 'submit-question',
+          interaction_id: 'question-multi-1'
+        },
+        form_value: {
+          choice_stack: ['choice:React', 'choice:Node.js']
+        }
+      }
+    });
+
+    expect(orchestrator.resolveInteractionById).toHaveBeenCalledWith(
+      'question-multi-1',
+      {
+        kind: 'question',
+        answers: {
+          stack: ['React', 'Node.js']
+        }
+      }
+    );
+    expect(JSON.stringify(response.card.data)).toContain('React, Node.js');
+  });
+
+  it('converts start confirmation replies into supplemental requirements without opening a new turn', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'coding-claw-feishu-adapter-'));
+    createdDirs.push(dir);
+
+    const client = createClientStub();
+    const startConfirmation = {
+      kind: 'question' as const,
+      id: 'start-confirm-1',
+      createdAt: new Date('2026-04-03T00:00:00Z').toISOString(),
+      questions: [
+        {
+          id: 'q_0',
+          header: '开始确认',
+          question: '确认开始实现？',
+          options: []
+        }
+      ]
+    };
+    const orchestrator = {
+      dispatchInbound: vi.fn(async (message) => ({
+        kind: 'runtime' as const,
+        message
+      })),
+      dispatchControlCommand: vi.fn(async () => ({
+        format: 'text' as const,
+        text: 'unused'
+      })),
+      listPendingInteractions: vi.fn(async () => [startConfirmation]),
+      handleInbound: vi.fn(async () => {}),
+      resolveInteractionById: vi.fn(async () => ({
+        chatId: 'chat-1',
+        interaction: startConfirmation,
+        resolution: {
+          kind: 'question' as const,
+          answers: { q_0: '补充说明' }
+        }
+      }))
+    };
+
+    const adapter = new FeishuChannelAdapter(
+      {
+        appId: 'app-id',
+        appSecret: 'app-secret',
+        inboundStorePath: join(dir, 'inbound.json')
+      },
+      orchestrator as any
+    );
+    (adapter as any).client = client;
+    (adapter as any).interactionMessages.set('start-confirm-1', {
+      chatId: 'chat-1',
+      messageId: 'reply-message-1',
+      interaction: startConfirmation
+    });
+
+    const markCompleted = vi.fn(async () => {});
+    const markFailed = vi.fn(async () => {});
+    (adapter as any).inboundMessageStore = {
+      reserve: vi.fn(async () => ({
+        action: 'accepted',
+        record: {
+          messageId: 'om_start_reply',
+          chatId: 'chat-1',
+          status: 'processing'
+        }
+      })),
+      markCompleted,
+      markFailed
+    };
+
+    await (adapter as any).onMessage(
+      createTextMessagePayload('om_start_reply', 'chat-1', '补充说明')
+    );
+    await flushMicrotasks();
+
+    expect(orchestrator.resolveInteractionById).toHaveBeenCalledTimes(1);
+    expect(orchestrator.handleInbound).not.toHaveBeenCalled();
+    expect(client.im.message.update).toHaveBeenCalledTimes(1);
+    expect(markCompleted).toHaveBeenCalledWith('om_start_reply');
+    expect(markFailed).not.toHaveBeenCalled();
+  });
+
+  it('fetches a chat announcement into session metadata', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'coding-claw-feishu-adapter-'));
+    createdDirs.push(dir);
+
+    const adapter = new FeishuChannelAdapter(
+      {
+        appId: 'app-id',
+        appSecret: 'app-secret',
+        inboundStorePath: join(dir, 'inbound.json')
+      },
+      {} as any
+    );
+    const client = createClientStub();
+    client.request = vi.fn(async () => ({
+      data: {
+        announcement: {
+          content: '请使用中文回复\n\n先给结论'
+        }
+      }
+    }));
+    (adapter as any).client = client;
+
+    const metadata = await adapter.getSessionMetadata('chat-1');
+
+    expect(client.request).toHaveBeenCalledWith({
+      method: 'GET',
+      url: '/open-apis/im/v1/chats/chat-1/announcement'
+    });
+    expect(metadata[FEISHU_CHAT_ANNOUNCEMENT_METADATA_KEY]).toBe(
+      '请使用中文回复\n先给结论'
+    );
+    expect(
+      metadata[FEISHU_CHAT_ANNOUNCEMENT_UPDATED_AT_METADATA_KEY]
+    ).toBeTypeOf('string');
+  });
+
+  it('drops empty chat announcements from session metadata', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'coding-claw-feishu-adapter-'));
+    createdDirs.push(dir);
+
+    const adapter = new FeishuChannelAdapter(
+      {
+        appId: 'app-id',
+        appSecret: 'app-secret',
+        inboundStorePath: join(dir, 'inbound.json')
+      },
+      {} as any
+    );
+    const client = createClientStub();
+    client.request = vi.fn(async () => ({
+      data: {
+        announcement: {
+          content: '   '
+        }
+      }
+    }));
+    (adapter as any).client = client;
+
+    const metadata = await adapter.getSessionMetadata('chat-1');
+
+    expect(metadata[FEISHU_CHAT_ANNOUNCEMENT_METADATA_KEY]).toBeUndefined();
+    expect(
+      metadata[FEISHU_CHAT_ANNOUNCEMENT_UPDATED_AT_METADATA_KEY]
+    ).toBeTypeOf('string');
+  });
+
+  it('degrades gracefully when fetching a chat announcement fails', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'coding-claw-feishu-adapter-'));
+    createdDirs.push(dir);
+
+    const adapter = new FeishuChannelAdapter(
+      {
+        appId: 'app-id',
+        appSecret: 'app-secret',
+        inboundStorePath: join(dir, 'inbound.json')
+      },
+      {} as any
+    );
+    const client = createClientStub();
+    client.request = vi.fn(async () => {
+      throw new Error('request failed');
+    });
+    (adapter as any).client = client;
+
+    const metadata = await adapter.getSessionMetadata('chat-1');
+
+    expect(metadata[FEISHU_CHAT_ANNOUNCEMENT_METADATA_KEY]).toBeUndefined();
+    expect(
+      metadata[FEISHU_CHAT_ANNOUNCEMENT_UPDATED_AT_METADATA_KEY]
+    ).toBeTypeOf('string');
+  });
+
+  it('normalizes post messages into plain text before dispatching', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'coding-claw-feishu-adapter-'));
+    createdDirs.push(dir);
+
+    const orchestrator = {
+      dispatchInbound: vi.fn(async (message) => ({
+        kind: 'runtime' as const,
+        message
+      })),
+      dispatchControlCommand: vi.fn(async () => ({
+        format: 'text' as const,
+        text: 'unused'
+      })),
+      listPendingInteractions: vi.fn(async () => []),
+      handleInbound: vi.fn(async () => {})
+    };
+    const adapter = new FeishuChannelAdapter(
+      {
+        appId: 'app-id',
+        appSecret: 'app-secret',
+        inboundStorePath: join(dir, 'inbound.json')
+      },
+      orchestrator as any
+    );
+    (adapter as any).client = createClientStub();
+
+    const markCompleted = vi.fn(async () => {});
+    const markFailed = vi.fn(async () => {});
+    (adapter as any).inboundMessageStore = {
+      reserve: vi.fn(async () => ({
+        action: 'accepted',
+        record: {
+          messageId: 'om_post_1',
+          chatId: 'chat-1',
+          status: 'processing'
+        }
+      })),
+      markCompleted,
+      markFailed
+    };
+
+    await (adapter as any).onMessage(
+      createPostMessagePayload('om_post_1', 'chat-1', {
+        title: '重复我下面说的话：',
+        content: [
+          [{ tag: 'text', text: '000', style: [] }],
+          [
+            { tag: 'text', text: '- 111', style: [] },
+            { tag: 'text', text: '- 222', style: [] }
+          ],
+          [
+            { tag: 'text', text: '1. 333', style: [] },
+            { tag: 'text', text: '2. 444', style: [] },
+            { tag: 'text', text: '3. 555', style: [] }
+          ],
+          [{ tag: 'text', text: '666', style: [] }],
+          [{ tag: 'text', text: '777', style: [] }],
+          [{ tag: 'text', text: '888', style: [] }]
+        ]
+      })
+    );
+    await flushMicrotasks();
+
+    expect(orchestrator.dispatchInbound).toHaveBeenCalledTimes(1);
+    expect(orchestrator.dispatchInbound).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: 'feishu',
+        chatId: 'chat-1',
+        messageId: 'om_post_1',
+        text: [
+          '重复我下面说的话：',
+          '000',
+          '- 111- 222',
+          '1. 3332. 4443. 555',
+          '666',
+          '777',
+          '888'
+        ].join('\n')
+      })
+    );
+    expect(markCompleted).toHaveBeenCalledWith('om_post_1');
+    expect(markFailed).not.toHaveBeenCalled();
+  });
+
+  function createPostMessagePayload(
+    messageId: string,
+    chatId: string,
+    post: Record<string, unknown>
+  ): unknown {
+    return {
+      message: {
+        chat_id: chatId,
+        message_id: messageId,
+        message_type: 'post',
+        content: JSON.stringify(post)
+      }
+    };
+  }
+
+  function createTextMessagePayload(
+    messageId: string,
+    chatId: string,
+    text: string
+  ): unknown {
+    return {
+      message: {
+        chat_id: chatId,
+        message_id: messageId,
+        message_type: 'text',
+        content: JSON.stringify({ text })
+      }
+    };
+  }
+
+  function createDeferred<T>() {
+    let resolve!: (value: T | PromiseLike<T>) => void;
+    let reject!: (reason?: unknown) => void;
+    const promise = new Promise<T>((innerResolve, innerReject) => {
+      resolve = innerResolve;
+      reject = innerReject;
+    });
+    return { promise, resolve, reject };
+  }
+
+  async function flushMicrotasks(): Promise<void> {
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  }
+
+  function createClientStub() {
+    return {
+      im: {
+        message: {
+          reply: vi.fn(async () => ({
+            data: {
+              message_id: 'reply-message-1'
+            }
+          })),
+          update: vi.fn(async () => ({})),
+          create: vi.fn(async () => ({
+            data: {
+              message_id: 'create-message-1'
+            }
+          }))
+        }
+      },
+      cardkit: {
+        v1: {
+          card: {
+            create: vi.fn(async () => ({
+              data: {
+                card_id: 'card-1'
+              }
+            })),
+            update: vi.fn(async () => ({}))
+          }
+        }
+      }
+    } as Record<string, any>;
+  }
+
+  function extractInteractionId(card: Record<string, unknown>): string {
+    return extractActionInteractionId(card, 'confirm-control-command');
+  }
+
+  function extractActionInteractionId(
+    card: Record<string, unknown>,
+    actionName: string
+  ): string {
+    const elements =
+      (card.body as { elements?: Array<Record<string, unknown>> } | undefined)
+        ?.elements ?? [];
+    const confirmButton = elements.find(
+      (element) =>
+        element.tag === 'button' &&
+        (element.value as { action?: string } | undefined)?.action ===
+          actionName
+    );
+    return String(
+      (confirmButton?.value as { interaction_id?: string } | undefined)
+        ?.interaction_id ?? ''
+    );
+  }
+
   it('returns from inbound handling before the runtime turn finishes', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'coding-claw-feishu-adapter-'));
     createdDirs.push(dir);
@@ -1530,101 +3156,3 @@ describe('FeishuChannelAdapter', () => {
     expect(markFailed).not.toHaveBeenCalled();
   });
 });
-
-function createPostMessagePayload(
-  messageId: string,
-  chatId: string,
-  post: Record<string, unknown>
-): unknown {
-  return {
-    message: {
-      chat_id: chatId,
-      message_id: messageId,
-      message_type: 'post',
-      content: JSON.stringify(post)
-    }
-  };
-}
-
-function createTextMessagePayload(
-  messageId: string,
-  chatId: string,
-  text: string
-): unknown {
-  return {
-    message: {
-      chat_id: chatId,
-      message_id: messageId,
-      message_type: 'text',
-      content: JSON.stringify({ text })
-    }
-  };
-}
-
-function createDeferred<T>() {
-  let resolve!: (value: T | PromiseLike<T>) => void;
-  let reject!: (reason?: unknown) => void;
-  const promise = new Promise<T>((innerResolve, innerReject) => {
-    resolve = innerResolve;
-    reject = innerReject;
-  });
-  return { promise, resolve, reject };
-}
-
-async function flushMicrotasks(): Promise<void> {
-  await new Promise((resolve) => setTimeout(resolve, 0));
-}
-
-function createClientStub() {
-  return {
-    im: {
-      message: {
-        reply: vi.fn(async () => ({
-          data: {
-            message_id: 'reply-message-1'
-          }
-        })),
-        update: vi.fn(async () => ({})),
-        create: vi.fn(async () => ({
-          data: {
-            message_id: 'create-message-1'
-          }
-        }))
-      }
-    },
-    cardkit: {
-      v1: {
-        card: {
-          create: vi.fn(async () => ({
-            data: {
-              card_id: 'card-1'
-            }
-          })),
-          update: vi.fn(async () => ({}))
-        }
-      }
-    }
-  };
-}
-
-function extractInteractionId(card: Record<string, unknown>): string {
-  return extractActionInteractionId(card, 'confirm-control-command');
-}
-
-function extractActionInteractionId(
-  card: Record<string, unknown>,
-  actionName: string
-): string {
-  const elements =
-    (card.body as { elements?: Array<Record<string, unknown>> } | undefined)
-      ?.elements ?? [];
-  const confirmButton = elements.find(
-    (element) =>
-      element.tag === 'button' &&
-      (element.value as { action?: string } | undefined)?.action === actionName
-  );
-  return String(
-    (confirmButton?.value as { interaction_id?: string } | undefined)
-      ?.interaction_id ?? ''
-  );
-}

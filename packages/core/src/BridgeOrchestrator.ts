@@ -31,6 +31,8 @@ import type {
   InteractionResolution,
   PendingInteraction,
   PermissionMode,
+  SessionContextProvider,
+  SessionMetadataPatch,
   WorkspaceBinding
 } from './types.js';
 
@@ -42,6 +44,7 @@ export interface BridgeOrchestratorDeps {
   controls: ChatControlStateStore;
   shellExecutor: ShellExecutor;
   workspaceRoot: string;
+  sessionContextProvider?: SessionContextProvider;
 }
 
 export class BridgeOrchestrator {
@@ -217,6 +220,7 @@ export class BridgeOrchestrator {
     surface: RenderSurface
   ): Promise<void> {
     const binding = await this.getOrCreateBinding(message.chatId);
+    await this.refreshSessionMetadataForNewSession(binding);
     const session = await this.getOrCreateSession(binding);
     const turnId = randomUUID();
     let model = createInitialRenderModel(turnId, message.text);
@@ -338,26 +342,19 @@ export class BridgeOrchestrator {
     if (!isCrossPlatformAbsolutePath(nextWorkspacePath)) {
       return {
         format: 'text',
-        text: 'reset 目标工作区必须是绝对路径。'
+        text: 'workspace 必须是绝对路径。'
       };
     }
 
-    await this.resetAgentState(binding, control);
-    await this.deps.shellExecutor.reset(binding.chatId);
-    mkdirSync(nextWorkspacePath, { recursive: true });
-    binding.workspacePath = nextWorkspacePath;
-    binding.updatedAt = new Date().toISOString();
-    await this.deps.bindings.upsert(binding);
-    control.cwd = nextWorkspacePath;
-    control.shellStatus = 'inactive';
-    control.shellSessionId = undefined;
-    control.updatedAt = new Date().toISOString();
-    await this.deps.controls.upsert(control);
+    await this.resetAgentState(binding, control, {
+      nextWorkspacePath,
+      resetShell: true
+    });
 
     return {
       format: 'text',
       text: [
-        '工作区已重置',
+        '已重置 workspace、shell 与会话。',
         `cwd: ${control.cwd}`,
         `workspace: ${binding.workspacePath}`
       ].join('\n')
@@ -376,118 +373,17 @@ export class BridgeOrchestrator {
       };
     }
 
-    await this.resetAgentState(binding, control);
+    await this.resetAgentState(binding, control, {
+      nextWorkspacePath: binding.workspacePath,
+      resetShell: false
+    });
 
     return {
       format: 'text',
       text: [
-        '已开启新会话',
+        '已开启新会话（保留当前 workspace 与 cwd）。',
         `cwd: ${control.cwd}`,
         `workspace: ${binding.workspacePath}`
-      ].join('\n')
-    };
-  }
-
-  private async handleAgentStatus(
-    binding: WorkspaceBinding,
-    control: ChatControlState
-  ): Promise<ControlResponse> {
-    const session = this.sessions.get(binding.chatId);
-    const pending = await this.deps.approvals.listPending(binding.chatId);
-    const status = session
-      ? await session.getStatus()
-      : {
-          state: 'not-started' as const,
-          supportsContextUsage: false
-        };
-    const sessionId = status.sessionId ?? binding.sessionId ?? '(none)';
-    const contextUsage = status.contextUsage;
-    const contextTokens =
-      contextUsage?.totalTokens !== undefined &&
-      contextUsage.maxTokens !== undefined &&
-      contextUsage.percentage !== undefined
-        ? `${contextUsage.totalTokens}/${contextUsage.maxTokens} (${formatContextPercentage(contextUsage.percentage)})`
-        : 'unavailable';
-    return {
-      format: 'text',
-      text: [
-        'Agent 状态',
-        `session: ${status.state}`,
-        `sessionId: ${sessionId}`,
-        `cwd: ${control.cwd}`,
-        `pendingInteractions: ${pending.length}`,
-        `permissionMode: ${binding.mode}`,
-        `model: ${binding.model ?? '(default)'}`,
-        `contextTokens: ${contextTokens}`
-      ].join('\n')
-    };
-  }
-
-  private async handleAgentMode(
-    argsText: string,
-    binding: WorkspaceBinding
-  ): Promise<ControlResponse> {
-    const rawMode = argsText.trim();
-    if (!rawMode) {
-      return {
-        format: 'agent-mode-picker',
-        currentMode: binding.mode,
-        options: AGENT_MODE_OPTIONS
-      };
-    }
-
-    const nextMode = parsePermissionMode(rawMode);
-    if (!nextMode) {
-      return {
-        format: 'text',
-        text: [
-          `未知权限模式: ${rawMode}`,
-          '用法: /agent mode [default|acceptEdits|bypassPermissions|plan|dontAsk]'
-        ].join('\n')
-      };
-    }
-
-    binding.mode = nextMode;
-    binding.updatedAt = new Date().toISOString();
-    await this.deps.bindings.upsert(binding);
-
-    return {
-      format: 'text',
-      text: [
-        'Agent 权限模式已切换',
-        `mode: ${binding.mode}`,
-        'session: preserved',
-        'takesEffect: next-turn'
-      ].join('\n')
-    };
-  }
-
-  private async handleAgentModel(
-    argsText: string,
-    binding: WorkspaceBinding,
-    control: ChatControlState
-  ): Promise<ControlResponse> {
-    const nextModel = argsText.trim();
-    if (!nextModel) {
-      return {
-        format: 'agent-model-picker',
-        currentModel: binding.model ?? 'default',
-        options: buildAgentModelOptions()
-      };
-    }
-
-    binding.model = nextModel === 'default' ? undefined : nextModel;
-    binding.updatedAt = new Date().toISOString();
-    await this.deps.bindings.upsert(binding);
-    await this.resetAgentState(binding, control);
-
-    return {
-      format: 'text',
-      text: [
-        'Agent 模型已切换',
-        `model: ${binding.model ?? 'default'}`,
-        `source: ${binding.model ? 'chat-binding' : 'runtime-default'}`,
-        'session: reset'
       ].join('\n')
     };
   }
@@ -497,10 +393,11 @@ export class BridgeOrchestrator {
     binding: WorkspaceBinding,
     control: ChatControlState
   ): Promise<ControlResponse> {
-    if (!argsText.trim()) {
+    const command = argsText.trim();
+    if (!command) {
       return {
         format: 'text',
-        text: '用法: /shell exec <command>\n别名: /sx <command>'
+        text: '用法: /sx <command>'
       };
     }
 
@@ -508,19 +405,19 @@ export class BridgeOrchestrator {
       chatId: binding.chatId,
       workspacePath: binding.workspacePath,
       cwd: control.cwd,
-      command: argsText
+      command
     });
 
     control.cwd = result.cwd;
-    control.shellStatus = 'ready';
     control.shellSessionId = result.sessionId;
+    control.shellStatus = 'ready';
     control.updatedAt = new Date().toISOString();
     await this.deps.controls.upsert(control);
 
     return {
       format: 'text',
       text: formatShellExecution(
-        argsText,
+        command,
         result.exitCode,
         result.stdout,
         result.stderr,
@@ -539,15 +436,23 @@ export class BridgeOrchestrator {
     control.updatedAt = new Date().toISOString();
     await this.deps.controls.upsert(control);
 
+    const lines = [
+      `workspace: ${binding.workspacePath}`,
+      `cwd: ${control.cwd}`,
+      `active: ${shell.active ? 'yes' : 'no'}`,
+      `running: ${shell.running ? 'yes' : 'no'}`,
+      `session: ${control.shellStatus}`
+    ];
+    if (shell.sessionId) {
+      lines.push(`sessionId: ${shell.sessionId}`);
+    }
+    if (shell.pid) {
+      lines.push(`pid: ${shell.pid}`);
+    }
+
     return {
       format: 'text',
-      text: [
-        'Shell 状态',
-        `session: ${shell.active ? (shell.running ? 'running' : 'ready') : 'inactive'}`,
-        `sessionId: ${shell.sessionId ?? '(none)'}`,
-        `pid: ${shell.pid ?? '(none)'}`,
-        `cwd: ${control.cwd}`
-      ].join('\n')
+      text: lines.join('\n')
     };
   }
 
@@ -555,46 +460,220 @@ export class BridgeOrchestrator {
     binding: WorkspaceBinding,
     control: ChatControlState
   ): Promise<ControlResponse> {
-    const session = this.sessions.get(binding.chatId);
-    const pending = await this.deps.approvals.listPending(binding.chatId);
+    const runtime = await this.getOrCreateSession(binding);
+    const status = await runtime.getStatus();
     const shell = await this.deps.shellExecutor.getStatus(binding.chatId);
     applyShellSnapshot(control, shell);
     control.updatedAt = new Date().toISOString();
     await this.deps.controls.upsert(control);
+
+    const lines = [
+      `chatId: ${binding.chatId}`,
+      `workspace: ${binding.workspacePath}`,
+      `cwd: ${control.cwd}`,
+      `mode: ${binding.mode}`,
+      `model: ${binding.model ?? '(default)'}`,
+      `agent: ${status.state}`,
+      `shell active: ${shell.active ? 'yes' : 'no'}`,
+      `shell running: ${shell.running ? 'yes' : 'no'}`
+    ];
+
+    if (status.sessionId) {
+      lines.push(`sessionId: ${status.sessionId}`);
+    }
+    if (shell.sessionId) {
+      lines.push(`shell sessionId: ${shell.sessionId}`);
+    }
+    if (status.contextUsage) {
+      lines.push(
+        `context: ${formatContextUsage(status.contextUsage.percentage, status.contextUsage.totalTokens, status.contextUsage.maxTokens)}`
+      );
+    }
+
+    return {
+      format: 'text',
+      text: lines.join('\n')
+    };
+  }
+
+  private async handleAgentMode(
+    argsText: string,
+    binding: WorkspaceBinding
+  ): Promise<ControlResponse> {
+    const nextModeInput = argsText.trim();
+    if (!nextModeInput) {
+      return {
+        format: 'agent-mode-picker',
+        currentMode: binding.mode,
+        options: buildAgentModeOptions()
+      };
+    }
+
+    const nextMode = normalizePermissionMode(nextModeInput);
+    if (!nextMode) {
+      return {
+        format: 'text',
+        text: [
+          `未知权限模式: ${nextModeInput}`,
+          '/agent mode [default|acceptEdits|bypassPermissions|plan|dontAsk]'
+        ].join('\n')
+      };
+    }
+
+    if (binding.mode === nextMode) {
+      return {
+        format: 'text',
+        text: [
+          'Agent 权限模式未变化',
+          `mode: ${binding.mode}`,
+          'session: preserved',
+          'takesEffect: immediate'
+        ].join('\n')
+      };
+    }
+
+    binding.mode = nextMode;
+    binding.updatedAt = new Date().toISOString();
+    await this.deps.bindings.upsert(binding);
     return {
       format: 'text',
       text: [
-        'Chat 状态',
-        `cwd: ${control.cwd}`,
-        `inputMode: ${control.inputMode}`,
-        `shellStatus: ${control.shellStatus}`,
-        `shellSessionId: ${control.shellSessionId ?? '(none)'}`,
-        `agentSession: ${session ? (session.busy ? 'running' : 'idle') : 'not-started'}`,
-        `sessionId: ${binding.sessionId ?? '(none)'}`,
-        `pendingInteractions: ${pending.length}`,
-        `workspace: ${binding.workspacePath}`
+        'Agent 权限模式已切换',
+        `mode: ${binding.mode}`,
+        'session: preserved',
+        'takesEffect: next-turn'
       ].join('\n')
     };
   }
 
-  private async resetAgentState(
+  private async handleAgentModel(
+    argsText: string,
     binding: WorkspaceBinding,
     control: ChatControlState
+  ): Promise<ControlResponse> {
+    const nextModelInput = argsText.trim();
+    const options = buildAgentModelOptions();
+    if (!nextModelInput) {
+      return {
+        format: 'agent-model-picker',
+        currentModel: binding.model ?? 'default',
+        options
+      };
+    }
+
+    const resolvedModel = resolveAgentModelInput(nextModelInput, options);
+    if (!resolvedModel) {
+      return {
+        format: 'text',
+        text: `不支持的模型: ${nextModelInput}`
+      };
+    }
+
+    const nextModel = resolvedModel === 'default' ? undefined : resolvedModel;
+    if (binding.model === nextModel) {
+      return {
+        format: 'text',
+        text: [
+          'Agent 模型未变化',
+          `model: ${nextModel ?? 'default'}`,
+          `source: ${nextModel ? 'chat-binding' : 'runtime-default'}`,
+          'session: preserved'
+        ].join('\n')
+      };
+    }
+
+    await this.resetAgentState(binding, control, {
+      nextWorkspacePath: binding.workspacePath,
+      resetShell: false,
+      nextModel,
+      clearModelOverride: nextModel === undefined
+    });
+
+    return {
+      format: 'text',
+      text: [
+        'Agent 模型已切换',
+        `model: ${binding.model ?? 'default'}`,
+        `source: ${binding.model ? 'chat-binding' : 'runtime-default'}`,
+        'session: reset'
+      ].join('\n')
+    };
+  }
+
+  private async handleAgentStatus(
+    binding: WorkspaceBinding,
+    control: ChatControlState
+  ): Promise<ControlResponse> {
+    return this.handleChatStatus(binding, control);
+  }
+
+  private async resetAgentState(
+    binding: WorkspaceBinding,
+    control: ChatControlState,
+    options: {
+      nextWorkspacePath: string;
+      resetShell: boolean;
+      nextModel?: string;
+      clearModelOverride?: boolean;
+    }
   ): Promise<void> {
-    const session = this.sessions.get(binding.chatId);
-    session?.abort();
-    this.sessions.delete(binding.chatId);
     await this.deps.runtime.dropSession(binding.chatId);
+    this.sessions.delete(binding.chatId);
     await this.deps.approvals.clearChat(binding.chatId);
     await this.deps.transcripts.clearChat(binding.chatId);
 
+    const now = new Date().toISOString();
+    binding.workspacePath = options.nextWorkspacePath;
+    binding.workspaceId = binding.chatId;
     binding.sessionId = undefined;
-    binding.updatedAt = new Date().toISOString();
+    binding.model = options.clearModelOverride
+      ? undefined
+      : (options.nextModel ?? binding.model);
+    binding.updatedAt = now;
+    mkdirSync(binding.workspacePath, { recursive: true });
     await this.deps.bindings.upsert(binding);
 
-    control.lastAgentResetAt = new Date().toISOString();
-    control.updatedAt = control.lastAgentResetAt;
+    if (options.resetShell) {
+      await this.deps.shellExecutor.reset(binding.chatId);
+      control.cwd = binding.workspacePath;
+      control.shellSessionId = undefined;
+      control.shellStatus = 'inactive';
+    } else {
+      const shell = await this.deps.shellExecutor.getStatus(binding.chatId);
+      applyShellSnapshot(control, shell);
+    }
+
+    control.lastAgentResetAt = now;
+    control.updatedAt = now;
     await this.deps.controls.upsert(control);
+  }
+
+  private async refreshSessionMetadataForNewSession(
+    binding: WorkspaceBinding
+  ): Promise<void> {
+    if (binding.sessionId || this.sessions.has(binding.chatId)) {
+      return;
+    }
+
+    const provider = this.deps.sessionContextProvider;
+    if (!provider) {
+      return;
+    }
+
+    try {
+      const patch = await provider.getSessionMetadata(binding.chatId);
+      if (!applySessionMetadataPatch(binding, patch)) {
+        return;
+      }
+
+      binding.updatedAt = new Date().toISOString();
+      await this.deps.bindings.upsert(binding);
+    } catch (error) {
+      logWarn('[bridge] failed to refresh session metadata', {
+        chatId: binding.chatId,
+        error: errorToLogObject(error)
+      });
+    }
   }
 
   private async persistAndRender(
@@ -720,154 +799,170 @@ function applyShellSnapshot(
       ? 'running'
       : 'ready'
     : 'inactive';
-  control.shellSessionId = shell.active ? shell.sessionId : undefined;
+  control.shellSessionId = shell.sessionId;
 }
 
-function formatContextPercentage(value: number): string {
-  const normalized = value <= 1 ? value * 100 : value;
-  const rounded =
-    normalized >= 10
-      ? Math.round(normalized)
-      : Math.round(normalized * 10) / 10;
-  return `${rounded}%`;
+function buildAgentModeOptions(): AgentModeControlOption[] {
+  return [
+    {
+      mode: 'default',
+      label: 'Default',
+      description: '按默认权限策略执行。'
+    },
+    {
+      mode: 'acceptEdits',
+      label: 'Accept Edits',
+      description: '允许常规编辑，必要时仍请求确认。'
+    },
+    {
+      mode: 'bypassPermissions',
+      label: 'Bypass Permissions',
+      description: '跳过大多数权限确认，适合受信任环境。'
+    },
+    {
+      mode: 'plan',
+      label: 'Plan',
+      description: '优先规划实现，并在执行前请求批准。'
+    },
+    {
+      mode: 'dontAsk',
+      label: 'Do not ask',
+      description: '尽量减少确认提示。'
+    }
+  ];
 }
-
-function parsePermissionMode(value: string): PermissionMode | undefined {
-  const normalized = value.trim().toLowerCase();
-  switch (normalized) {
-    case 'default':
-      return 'default';
-    case 'acceptedits':
-    case 'accept-edits':
-      return 'acceptEdits';
-    case 'bypasspermissions':
-    case 'bypass-permissions':
-      return 'bypassPermissions';
-    case 'plan':
-      return 'plan';
-    case 'dontask':
-    case 'dont-ask':
-      return 'dontAsk';
-    default:
-      return undefined;
-  }
-}
-
-const AGENT_MODE_OPTIONS: AgentModeControlOption[] = [
-  {
-    mode: 'default',
-    label: 'default',
-    description: '工作区内常规开发操作默认放行，高风险动作再确认。'
-  },
-  {
-    mode: 'acceptEdits',
-    label: 'acceptEdits',
-    description: '对常规编辑更宽松，但敏感路径和高风险动作仍受约束。'
-  },
-  {
-    mode: 'bypassPermissions',
-    label: 'bypassPermissions',
-    description: '尽量跳过权限确认，适合你明确要快速推进时使用。'
-  },
-  {
-    mode: 'plan',
-    label: 'plan',
-    description: '优先规划与低风险探索，高风险动作继续要求确认。'
-  },
-  {
-    mode: 'dontAsk',
-    label: 'dontAsk',
-    description: '对需确认的动作更保守，适合只看不改或最小化执行。'
-  }
-];
 
 function buildAgentModelOptions(): AgentModelControlOption[] {
-  // Runtime default model comes from CLAUDE_MODEL. The picker below exposes
-  // chat-level overrides and documents how the alias targets currently map.
-  const sonnetTarget =
-    process.env.ANTHROPIC_DEFAULT_SONNET_MODEL?.trim() || 'claude-sonnet-4-6';
-  const opusTarget =
-    process.env.ANTHROPIC_DEFAULT_OPUS_MODEL?.trim() || 'claude-opus-4-6';
-  const haikuTarget =
-    process.env.ANTHROPIC_DEFAULT_HAIKU_MODEL?.trim() ||
-    'claude-haiku-4-5-20251001';
-  const sonnet1mTarget =
-    process.env.ANTHROPIC_DEFAULT_SONNET_1M_MODEL?.trim() || sonnetTarget;
-  const opus1mTarget =
-    process.env.ANTHROPIC_DEFAULT_OPUS_1M_MODEL?.trim() || opusTarget;
-  const disable1m = ['1', 'true', 'yes', 'on'].includes(
-    (process.env.CLAUDE_CODE_DISABLE_1M_CONTEXT ?? '').trim().toLowerCase()
-  );
-
   const options: AgentModelControlOption[] = [
     {
       model: 'default',
       label: 'default',
-      description:
-        '清除当前模型覆盖，回到 Claude Code / 当前账号层级的默认模型。'
+      description: '使用 runtime 默认模型。'
     },
     {
       model: 'best',
       label: 'best',
-      description: '选择当前最强的可用模型；在当前官方语义下通常等价于 opus。'
+      description: '使用 Claude Code 默认 best 档位。'
     },
     {
       model: 'sonnet',
       label: 'sonnet',
-      description: formatAliasDescription('通用主力模型 alias。', sonnetTarget)
+      description: 'claude-sonnet-4-6'
     },
     {
       model: 'opus',
       label: 'opus',
-      description: formatAliasDescription('更强推理能力 alias。', opusTarget)
+      description: 'claude-opus-4-6'
     },
     {
       model: 'haiku',
       label: 'haiku',
-      description: formatAliasDescription('更快更轻量的 alias。', haikuTarget)
+      description: 'claude-haiku-4-5-20251001'
     },
-    ...(!disable1m
-      ? ([
-          {
-            model: 'sonnet[1m]',
-            label: 'sonnet[1m]',
-            description: formatAliasDescription(
-              '1M 上下文 Sonnet alias，适合超大仓库或长文档场景。',
-              sonnet1mTarget
-            )
-          },
-          {
-            model: 'opus[1m]',
-            label: 'opus[1m]',
-            description: formatAliasDescription(
-              '1M 上下文 Opus alias，适合超长上下文深度分析。',
-              opus1mTarget
-            )
-          }
-        ] satisfies AgentModelControlOption[])
-      : []),
+    {
+      model: 'sonnet[1m]',
+      label: 'sonnet[1m]',
+      description: 'claude-sonnet-4-6'
+    },
+    {
+      model: 'opus[1m]',
+      label: 'opus[1m]',
+      description: 'claude-opus-4-6'
+    },
     {
       model: 'opusplan',
       label: 'opusplan',
-      description: '规划/方案类场景使用的 Opus plan alias。'
+      description: 'Claude Code 规划优先档位。'
     }
   ];
 
   const customModel = process.env.ANTHROPIC_CUSTOM_MODEL_OPTION?.trim();
-  if (customModel) {
+  if (customModel && !options.some((option) => option.model === customModel)) {
     options.push({
       model: customModel,
       label: customModel,
-      description: '来自 ANTHROPIC_CUSTOM_MODEL_OPTION 的自定义模型项。'
+      description: `Custom model: ${customModel}`
     });
   }
 
   return options;
 }
 
-function formatAliasDescription(
-  prefix: string,
-  target: string | undefined
+function normalizePermissionMode(value: string): PermissionMode | undefined {
+  const normalized = value.trim();
+  const aliasMap: Record<string, PermissionMode> = {
+    default: 'default',
+    acceptedits: 'acceptEdits',
+    'accept-edits': 'acceptEdits',
+    bypasspermissions: 'bypassPermissions',
+    'bypass-permissions': 'bypassPermissions',
+    plan: 'plan',
+    dontask: 'dontAsk',
+    'dont-ask': 'dontAsk'
+  };
+
+  return aliasMap[normalized.toLowerCase()];
+}
+
+function resolveAgentModelInput(
+  value: string,
+  options: AgentModelControlOption[]
+): string | undefined {
+  const normalized = value.trim();
+  if (!normalized) {
+    return undefined;
+  }
+
+  if (normalized === 'default') {
+    return 'default';
+  }
+
+  if (normalized === 'claude-sonnet-4-6' || normalized === 'claude-opus-4-6') {
+    return normalized;
+  }
+
+  if (options.some((option) => option.model === normalized)) {
+    return normalized;
+  }
+
+  const customModel = process.env.ANTHROPIC_CUSTOM_MODEL_OPTION?.trim();
+  if (customModel === normalized) {
+    return normalized;
+  }
+
+  return undefined;
+}
+
+function formatContextUsage(
+  percentage?: number,
+  totalTokens?: number,
+  maxTokens?: number
 ): string {
-  return target ? `${prefix} 当前映射: ${target}` : prefix;
+  const ratio =
+    percentage === undefined ? 'unknown' : `${Math.round(percentage * 100)}%`;
+  const total = totalTokens === undefined ? '?' : String(totalTokens);
+  const max = maxTokens === undefined ? '?' : String(maxTokens);
+  return `${ratio} (${total}/${max})`;
+}
+
+function applySessionMetadataPatch(
+  binding: WorkspaceBinding,
+  patch: SessionMetadataPatch
+): boolean {
+  let changed = false;
+  for (const [key, value] of Object.entries(patch)) {
+    if (value === undefined) {
+      if (key in binding.metadata) {
+        delete binding.metadata[key];
+        changed = true;
+      }
+      continue;
+    }
+
+    if (binding.metadata[key] !== value) {
+      binding.metadata[key] = value;
+      changed = true;
+    }
+  }
+  return changed;
 }

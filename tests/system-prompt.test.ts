@@ -3,7 +3,10 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { buildSystemPrompt } from '../packages/runtime-claude/src/prompt/buildSystemPrompt.js';
-import type { WorkspaceBinding } from '../packages/core/src/types.js';
+import {
+  FEISHU_CHAT_ANNOUNCEMENT_METADATA_KEY,
+  type WorkspaceBinding
+} from '../packages/core/src/types.js';
 
 const createdDirs: string[] = [];
 
@@ -60,6 +63,67 @@ describe('buildSystemPrompt', () => {
     expect(result.sections.some((section) => section.name === 'memory')).toBe(
       true
     );
+  });
+
+  it('includes a Feishu announcement section when metadata is present', async () => {
+    const workspacePath = await mkdtemp(join(tmpdir(), 'coding-claw-'));
+    createdDirs.push(workspacePath);
+
+    const binding: WorkspaceBinding = {
+      chatId: 'chat-1',
+      workspaceId: 'chat-1',
+      workspacePath,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      runtime: 'claude',
+      channel: 'feishu',
+      mode: 'default',
+      metadata: {
+        [FEISHU_CHAT_ANNOUNCEMENT_METADATA_KEY]: '请使用中文回复\n先给结论'
+      }
+    };
+
+    const result = await buildSystemPrompt({ binding });
+
+    expect(result.prompt).toContain(
+      'Additional instructions sourced from the Feishu group announcement:'
+    );
+    expect(result.prompt).toContain('请使用中文回复');
+    expect(
+      result.sections.some(
+        (section) => section.name === 'feishu_chat_announcement'
+      )
+    ).toBe(true);
+  });
+
+  it('omits the Feishu announcement section when metadata is blank', async () => {
+    const workspacePath = await mkdtemp(join(tmpdir(), 'coding-claw-'));
+    createdDirs.push(workspacePath);
+
+    const binding: WorkspaceBinding = {
+      chatId: 'chat-1',
+      workspaceId: 'chat-1',
+      workspacePath,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      runtime: 'claude',
+      channel: 'feishu',
+      mode: 'default',
+      metadata: {
+        [FEISHU_CHAT_ANNOUNCEMENT_METADATA_KEY]: '   '
+      }
+    };
+
+    const result = await buildSystemPrompt({ binding });
+
+    expect(result.prompt).not.toContain(
+      'Additional instructions sourced from the Feishu group announcement:'
+    );
+    expect(
+      result.sections.some(
+        (section) => section.name === 'feishu_chat_announcement'
+      )
+    ).toBe(false);
   });
 
   it('adds explicit team workflow guidance when team tools are available', async () => {

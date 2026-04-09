@@ -1,6 +1,12 @@
 export type * from './types.js';
 export type * from './contracts.js';
 
+export {
+  FEISHU_CHAT_ANNOUNCEMENT_METADATA_KEY,
+  FEISHU_CHAT_ANNOUNCEMENT_UPDATED_AT_METADATA_KEY
+} from './types.js';
+export type { SessionContextProvider, SessionMetadataPatch } from './types.js';
+
 export { BridgeOrchestrator } from './BridgeOrchestrator.js';
 export {
   COMMAND_REGISTRY,

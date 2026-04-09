@@ -2,6 +2,8 @@ import * as lark from '@larksuiteoapi/node-sdk';
 import { randomUUID } from 'node:crypto';
 import {
   COMMAND_REGISTRY,
+  FEISHU_CHAT_ANNOUNCEMENT_METADATA_KEY,
+  FEISHU_CHAT_ANNOUNCEMENT_UPDATED_AT_METADATA_KEY,
   errorToLogObject,
   isCrossPlatformAbsolutePath,
   logDebug,
@@ -19,7 +21,9 @@ import type {
   PendingInteraction,
   PendingQuestionRequest,
   PermissionMode,
-  ResetWorkspaceControlOption
+  ResetWorkspaceControlOption,
+  SessionContextProvider,
+  SessionMetadataPatch
 } from '@coding-claw/core';
 import { FeishuRenderSurface } from './FeishuRenderSurface.js';
 import { PersistentInboundMessageStore } from './PersistentInboundMessageStore.js';
@@ -83,6 +87,10 @@ interface FeishuMessageClient {
   };
 }
 
+interface FeishuAnnouncementClient {
+  request<T = unknown>(request: { method: string; url: string }): Promise<T>;
+}
+
 interface MutableWsClient {
   handleEventData(data: FeishuWsFrame): unknown;
 }
@@ -95,7 +103,13 @@ function asMutableWsClient(client: lark.WSClient): MutableWsClient {
   return client as unknown as MutableWsClient;
 }
 
-export class FeishuChannelAdapter {
+function asFeishuAnnouncementClient(
+  client: lark.Client
+): FeishuAnnouncementClient {
+  return client as unknown as FeishuAnnouncementClient;
+}
+
+export class FeishuChannelAdapter implements SessionContextProvider {
   private readonly client: lark.Client;
   private wsClient?: lark.WSClient;
   private readonly interactionMessages = new Map<
@@ -128,6 +142,40 @@ export class FeishuChannelAdapter {
     this.inboundMessageStore = new PersistentInboundMessageStore(
       config.inboundStorePath
     );
+  }
+
+  async getSessionMetadata(chatId: string): Promise<SessionMetadataPatch> {
+    const announcement = await this.getChatAnnouncement(chatId);
+    return {
+      [FEISHU_CHAT_ANNOUNCEMENT_METADATA_KEY]: announcement,
+      [FEISHU_CHAT_ANNOUNCEMENT_UPDATED_AT_METADATA_KEY]:
+        new Date().toISOString()
+    };
+  }
+
+  private async getChatAnnouncement(
+    chatId: string
+  ): Promise<string | undefined> {
+    const request = {
+      method: 'GET',
+      url: `/open-apis/im/v1/chats/${encodeURIComponent(chatId)}/announcement`
+    };
+
+    try {
+      const client = asFeishuAnnouncementClient(this.client);
+      const response = await callFeishuApi(
+        'im.chat.announcement.get',
+        request,
+        async () => await client.request(request)
+      );
+      return normalizeAnnouncementResponse(response);
+    } catch (error) {
+      logWarn('[feishu] failed to fetch chat announcement', {
+        chatId,
+        error: errorToLogObject(error)
+      });
+      return undefined;
+    }
   }
 
   async start(): Promise<void> {
@@ -1170,6 +1218,58 @@ export class FeishuChannelAdapter {
   }
 }
 
+function normalizeAnnouncementResponse(payload: unknown): string | undefined {
+  const text = extractAnnouncementText(payload);
+  if (!text) {
+    return undefined;
+  }
+
+  const normalized = text
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .join('\n')
+    .trim();
+
+  if (!normalized) {
+    return undefined;
+  }
+
+  return normalized.slice(0, 4000);
+}
+
+function extractAnnouncementText(payload: unknown): string {
+  if (!payload || typeof payload !== 'object') {
+    return '';
+  }
+
+  const record = payload as Record<string, unknown>;
+  const data =
+    record.data && typeof record.data === 'object'
+      ? (record.data as Record<string, unknown>)
+      : undefined;
+  const announcement =
+    data?.announcement && typeof data.announcement === 'object'
+      ? (data.announcement as Record<string, unknown>)
+      : undefined;
+
+  const candidates = [
+    announcement?.content,
+    announcement?.text,
+    data?.content,
+    data?.text,
+    record.content,
+    record.text
+  ];
+
+  for (const candidate of candidates) {
+    if (typeof candidate === 'string' && candidate.trim()) {
+      return candidate;
+    }
+  }
+
+  return '';
+}
 function normalizeInboundMessageText(
   messageType: string,
   content:
@@ -1854,8 +1954,8 @@ function parseSensitiveControlCommand(
     return {
       commandId: parsed.match.id,
       argsText: parsed.match.argsText,
-      title: '确认执行危险 Shell 命令',
-      description: danger
+      title: '高风险命令确认',
+      description: `危险 Shell 命令：${danger}`
     };
   }
 
@@ -2022,7 +2122,7 @@ function buildRuntimeRoutingDecisionCard(
       template: 'orange',
       title: {
         tag: 'plain_text',
-        content: '处理中消息'
+        content: '当前会话正在执行'
       }
     },
     body: {

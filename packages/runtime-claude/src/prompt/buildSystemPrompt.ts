@@ -1,6 +1,9 @@
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import type { WorkspaceBinding } from '@coding-claw/core';
+import {
+  FEISHU_CHAT_ANNOUNCEMENT_METADATA_KEY,
+  type WorkspaceBinding
+} from '@coding-claw/core';
 
 export interface SystemPromptBuildOptions {
   binding: WorkspaceBinding;
@@ -134,6 +137,25 @@ function buildMcpSection(mcpServers: string[]): Section | null {
   };
 }
 
+function buildFeishuAnnouncementSection(
+  binding: WorkspaceBinding
+): Section | null {
+  const announcement =
+    binding.metadata[FEISHU_CHAT_ANNOUNCEMENT_METADATA_KEY]?.trim();
+  if (!announcement) {
+    return null;
+  }
+
+  return {
+    name: 'feishu_chat_announcement',
+    cached: false,
+    content: [
+      'Additional instructions sourced from the Feishu group announcement:',
+      announcement
+    ].join('\n')
+  };
+}
+
 function buildToolCapabilitySection(availableTools: string[]): Section | null {
   if (availableTools.length === 0) {
     return null;
@@ -191,6 +213,11 @@ export async function buildSystemPrompt(
   );
   if (toolCapabilitySection) {
     sections.push(toolCapabilitySection);
+  }
+
+  const feishuAnnouncement = buildFeishuAnnouncementSection(options.binding);
+  if (feishuAnnouncement) {
+    sections.push(feishuAnnouncement);
   }
 
   const claudeMd = await loadClaudeMd(options.binding);

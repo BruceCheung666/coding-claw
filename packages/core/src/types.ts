@@ -5,6 +5,16 @@ export type PermissionMode =
   | 'plan'
   | 'dontAsk';
 
+export const FEISHU_CHAT_ANNOUNCEMENT_METADATA_KEY = 'feishu.chatAnnouncement';
+export const FEISHU_CHAT_ANNOUNCEMENT_UPDATED_AT_METADATA_KEY =
+  'feishu.chatAnnouncementUpdatedAt';
+
+export type SessionMetadataPatch = Record<string, string | undefined>;
+
+export interface SessionContextProvider {
+  getSessionMetadata(chatId: string): Promise<SessionMetadataPatch>;
+}
+
 export type RuntimeUserMessagePriority = 'now' | 'next' | 'later';
 
 export type InteractionKind = 'permission' | 'question' | 'plan-approval';
