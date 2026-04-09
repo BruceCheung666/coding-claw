@@ -1,7 +1,7 @@
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import {
-  FEISHU_CHAT_ANNOUNCEMENT_METADATA_KEY,
+  CUSTOM_SYSTEM_PROMPT_METADATA_KEY,
   type WorkspaceBinding
 } from '@coding-claw/core';
 
@@ -137,21 +137,21 @@ function buildMcpSection(mcpServers: string[]): Section | null {
   };
 }
 
-function buildFeishuAnnouncementSection(
+function buildCustomSystemPromptSection(
   binding: WorkspaceBinding
 ): Section | null {
-  const announcement =
-    binding.metadata[FEISHU_CHAT_ANNOUNCEMENT_METADATA_KEY]?.trim();
-  if (!announcement) {
+  const customPrompt =
+    binding.metadata[CUSTOM_SYSTEM_PROMPT_METADATA_KEY]?.trim();
+  if (!customPrompt) {
     return null;
   }
 
   return {
-    name: 'feishu_chat_announcement',
+    name: 'custom_system_prompt',
     cached: false,
     content: [
-      'Additional instructions sourced from the Feishu group announcement:',
-      announcement
+      'Additional custom system instructions for this chat:',
+      customPrompt
     ].join('\n')
   };
 }
@@ -215,9 +215,9 @@ export async function buildSystemPrompt(
     sections.push(toolCapabilitySection);
   }
 
-  const feishuAnnouncement = buildFeishuAnnouncementSection(options.binding);
-  if (feishuAnnouncement) {
-    sections.push(feishuAnnouncement);
+  const customSystemPrompt = buildCustomSystemPromptSection(options.binding);
+  if (customSystemPrompt) {
+    sections.push(customSystemPrompt);
   }
 
   const claudeMd = await loadClaudeMd(options.binding);

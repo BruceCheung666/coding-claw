@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { buildSystemPrompt } from '../packages/runtime-claude/src/prompt/buildSystemPrompt.js';
 import {
-  FEISHU_CHAT_ANNOUNCEMENT_METADATA_KEY,
+  CUSTOM_SYSTEM_PROMPT_METADATA_KEY,
   type WorkspaceBinding
 } from '../packages/core/src/types.js';
 
@@ -65,7 +65,7 @@ describe('buildSystemPrompt', () => {
     );
   });
 
-  it('includes a Feishu announcement section when metadata is present', async () => {
+  it('includes a custom system prompt section when metadata is present', async () => {
     const workspacePath = await mkdtemp(join(tmpdir(), 'coding-claw-'));
     createdDirs.push(workspacePath);
 
@@ -79,24 +79,22 @@ describe('buildSystemPrompt', () => {
       channel: 'feishu',
       mode: 'default',
       metadata: {
-        [FEISHU_CHAT_ANNOUNCEMENT_METADATA_KEY]: '请使用中文回复\n先给结论'
+        [CUSTOM_SYSTEM_PROMPT_METADATA_KEY]: '请使用中文回复\n先给结论'
       }
     };
 
     const result = await buildSystemPrompt({ binding });
 
     expect(result.prompt).toContain(
-      'Additional instructions sourced from the Feishu group announcement:'
+      'Additional custom system instructions for this chat:'
     );
     expect(result.prompt).toContain('请使用中文回复');
     expect(
-      result.sections.some(
-        (section) => section.name === 'feishu_chat_announcement'
-      )
+      result.sections.some((section) => section.name === 'custom_system_prompt')
     ).toBe(true);
   });
 
-  it('omits the Feishu announcement section when metadata is blank', async () => {
+  it('omits the custom system prompt section when metadata is blank', async () => {
     const workspacePath = await mkdtemp(join(tmpdir(), 'coding-claw-'));
     createdDirs.push(workspacePath);
 
@@ -110,19 +108,17 @@ describe('buildSystemPrompt', () => {
       channel: 'feishu',
       mode: 'default',
       metadata: {
-        [FEISHU_CHAT_ANNOUNCEMENT_METADATA_KEY]: '   '
+        [CUSTOM_SYSTEM_PROMPT_METADATA_KEY]: '   '
       }
     };
 
     const result = await buildSystemPrompt({ binding });
 
     expect(result.prompt).not.toContain(
-      'Additional instructions sourced from the Feishu group announcement:'
+      'Additional custom system instructions for this chat:'
     );
     expect(
-      result.sections.some(
-        (section) => section.name === 'feishu_chat_announcement'
-      )
+      result.sections.some((section) => section.name === 'custom_system_prompt')
     ).toBe(false);
   });
 

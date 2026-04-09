@@ -2,10 +2,6 @@ import { mkdtemp, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import {
-  FEISHU_CHAT_ANNOUNCEMENT_METADATA_KEY,
-  FEISHU_CHAT_ANNOUNCEMENT_UPDATED_AT_METADATA_KEY
-} from '../packages/core/src/index.js';
 import { FeishuChannelAdapter } from '../packages/channel-feishu/src/FeishuChannelAdapter.js';
 
 const createdDirs: string[] = [];
@@ -168,6 +164,8 @@ describe('FeishuChannelAdapter', () => {
       '当前 workspace: `/workspace`'
     );
     expect(JSON.stringify(resetContent)).toContain('使用当前 workspace');
+    expect(JSON.stringify(resetContent)).toContain('custom_system_prompt');
+    expect(JSON.stringify(resetContent)).toContain('请先给结论');
 
     const response = await (adapter as any).onCardAction({
       action: {
@@ -175,6 +173,11 @@ describe('FeishuChannelAdapter', () => {
           action: 'apply-reset-workspace',
           chat_id: 'chat-1',
           workspace_source: 'cwd'
+        },
+        form_value: {
+          custom_system_prompt: {
+            value: '请先给结论'
+          }
         }
       }
     });
@@ -182,12 +185,15 @@ describe('FeishuChannelAdapter', () => {
     expect(orchestrator.dispatchControlCommand).toHaveBeenCalledWith(
       'chat-1',
       'reset',
-      '/workspace/subdir'
+      JSON.stringify({
+        workspacePath: '/workspace/subdir',
+        customSystemPrompt: '请先给结论'
+      })
     );
     expect(response.toast.content).toBe('工作区已重置');
     expect(response.card.data.header.template).toBe('green');
     expect(JSON.stringify(response.card.data)).toContain(
-      'cwd: /workspace/subdir'
+      '自定义系统提示词: 已设置'
     );
     expect(JSON.stringify(response.card.data)).toContain('/workspace/subdir');
   });
@@ -1489,98 +1495,6 @@ describe('FeishuChannelAdapter', () => {
     expect(markFailed).not.toHaveBeenCalled();
   });
 
-  it('fetches a chat announcement into session metadata', async () => {
-    const dir = await mkdtemp(join(tmpdir(), 'coding-claw-feishu-adapter-'));
-    createdDirs.push(dir);
-
-    const adapter = new FeishuChannelAdapter(
-      {
-        appId: 'app-id',
-        appSecret: 'app-secret',
-        inboundStorePath: join(dir, 'inbound.json')
-      },
-      {} as any
-    );
-    const client = createClientStub();
-    client.request = vi.fn(async () => ({
-      data: {
-        announcement: {
-          content: '请使用中文回复\n\n先给结论'
-        }
-      }
-    }));
-    (adapter as any).client = client;
-
-    const metadata = await adapter.getSessionMetadata('chat-1');
-
-    expect(client.request).toHaveBeenCalledWith({
-      method: 'GET',
-      url: '/open-apis/im/v1/chats/chat-1/announcement'
-    });
-    expect(metadata[FEISHU_CHAT_ANNOUNCEMENT_METADATA_KEY]).toBe(
-      '请使用中文回复\n先给结论'
-    );
-    expect(
-      metadata[FEISHU_CHAT_ANNOUNCEMENT_UPDATED_AT_METADATA_KEY]
-    ).toBeTypeOf('string');
-  });
-
-  it('drops empty chat announcements from session metadata', async () => {
-    const dir = await mkdtemp(join(tmpdir(), 'coding-claw-feishu-adapter-'));
-    createdDirs.push(dir);
-
-    const adapter = new FeishuChannelAdapter(
-      {
-        appId: 'app-id',
-        appSecret: 'app-secret',
-        inboundStorePath: join(dir, 'inbound.json')
-      },
-      {} as any
-    );
-    const client = createClientStub();
-    client.request = vi.fn(async () => ({
-      data: {
-        announcement: {
-          content: '   '
-        }
-      }
-    }));
-    (adapter as any).client = client;
-
-    const metadata = await adapter.getSessionMetadata('chat-1');
-
-    expect(metadata[FEISHU_CHAT_ANNOUNCEMENT_METADATA_KEY]).toBeUndefined();
-    expect(
-      metadata[FEISHU_CHAT_ANNOUNCEMENT_UPDATED_AT_METADATA_KEY]
-    ).toBeTypeOf('string');
-  });
-
-  it('degrades gracefully when fetching a chat announcement fails', async () => {
-    const dir = await mkdtemp(join(tmpdir(), 'coding-claw-feishu-adapter-'));
-    createdDirs.push(dir);
-
-    const adapter = new FeishuChannelAdapter(
-      {
-        appId: 'app-id',
-        appSecret: 'app-secret',
-        inboundStorePath: join(dir, 'inbound.json')
-      },
-      {} as any
-    );
-    const client = createClientStub();
-    client.request = vi.fn(async () => {
-      throw new Error('request failed');
-    });
-    (adapter as any).client = client;
-
-    const metadata = await adapter.getSessionMetadata('chat-1');
-
-    expect(metadata[FEISHU_CHAT_ANNOUNCEMENT_METADATA_KEY]).toBeUndefined();
-    expect(
-      metadata[FEISHU_CHAT_ANNOUNCEMENT_UPDATED_AT_METADATA_KEY]
-    ).toBeTypeOf('string');
-  });
-
   it('normalizes post messages into plain text before dispatching', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'coding-claw-feishu-adapter-'));
     createdDirs.push(dir);
@@ -1910,6 +1824,8 @@ describe('FeishuChannelAdapter', () => {
       '当前 workspace: `/workspace`'
     );
     expect(JSON.stringify(resetContent)).toContain('使用当前 workspace');
+    expect(JSON.stringify(resetContent)).toContain('custom_system_prompt');
+    expect(JSON.stringify(resetContent)).toContain('请先给结论');
 
     const response = await (adapter as any).onCardAction({
       action: {
@@ -1917,6 +1833,11 @@ describe('FeishuChannelAdapter', () => {
           action: 'apply-reset-workspace',
           chat_id: 'chat-1',
           workspace_source: 'cwd'
+        },
+        form_value: {
+          custom_system_prompt: {
+            value: '请先给结论'
+          }
         }
       }
     });
@@ -1924,12 +1845,15 @@ describe('FeishuChannelAdapter', () => {
     expect(orchestrator.dispatchControlCommand).toHaveBeenCalledWith(
       'chat-1',
       'reset',
-      '/workspace/subdir'
+      JSON.stringify({
+        workspacePath: '/workspace/subdir',
+        customSystemPrompt: '请先给结论'
+      })
     );
     expect(response.toast.content).toBe('工作区已重置');
     expect(response.card.data.header.template).toBe('green');
     expect(JSON.stringify(response.card.data)).toContain(
-      'cwd: /workspace/subdir'
+      '自定义系统提示词: 已设置'
     );
     expect(JSON.stringify(response.card.data)).toContain('/workspace/subdir');
   });

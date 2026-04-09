@@ -4,8 +4,7 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   BridgeOrchestrator,
-  FEISHU_CHAT_ANNOUNCEMENT_METADATA_KEY,
-  FEISHU_CHAT_ANNOUNCEMENT_UPDATED_AT_METADATA_KEY,
+  CUSTOM_SYSTEM_PROMPT_METADATA_KEY,
   FileApprovalStore,
   FileChatControlStateStore,
   FileTranscriptStore,
@@ -19,7 +18,6 @@ import {
   type BridgeEvent,
   type RenderSurface,
   type RuntimeSession,
-  type SessionContextProvider,
   type ShellExecutor,
   type ShellSessionSnapshot,
   type WorkspaceBinding
@@ -242,15 +240,23 @@ describe('BridgeOrchestrator', () => {
     });
   });
 
-  it('refreshes session metadata before the first turn of a new session', async () => {
-    const provider: SessionContextProvider = {
-      getSessionMetadata: vi.fn(async () => ({
-        [FEISHU_CHAT_ANNOUNCEMENT_METADATA_KEY]: '请使用中文回复',
-        [FEISHU_CHAT_ANNOUNCEMENT_UPDATED_AT_METADATA_KEY]:
-          '2026-04-09T00:00:00.000Z'
-      }))
-    };
+  it('keeps existing metadata when starting a first turn', async () => {
     const observedMetadata: Array<Record<string, string>> = [];
+    const bindings = new InMemoryWorkspaceBindingStore();
+    await bindings.upsert({
+      chatId: 'chat-meta-1',
+      workspaceId: 'chat-meta-1',
+      workspacePath: '/tmp/coding-claw-bridge-orchestrator/chat-meta-1',
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      runtime: 'claude',
+      channel: 'feishu',
+      mode: 'default',
+      metadata: {
+        [CUSTOM_SYSTEM_PROMPT_METADATA_KEY]: '请使用中文回复'
+      }
+    });
+
     const runtime: AgentRuntime = {
       async getOrCreateSession(
         binding: WorkspaceBinding
@@ -280,7 +286,6 @@ describe('BridgeOrchestrator', () => {
       },
       async dropSession(): Promise<void> {}
     };
-    const bindings = new InMemoryWorkspaceBindingStore();
 
     const orchestrator = new BridgeOrchestrator({
       runtime,
@@ -289,8 +294,7 @@ describe('BridgeOrchestrator', () => {
       controls: new InMemoryChatControlStateStore(),
       shellExecutor: new StubShellExecutor(),
       transcripts: new InMemoryTranscriptStore(),
-      workspaceRoot: '/tmp/coding-claw-bridge-orchestrator',
-      sessionContextProvider: provider
+      workspaceRoot: '/tmp/coding-claw-bridge-orchestrator'
     });
 
     await orchestrator.handleInbound(
@@ -303,99 +307,14 @@ describe('BridgeOrchestrator', () => {
       createRenderSurface()
     );
 
-    expect(provider.getSessionMetadata).toHaveBeenCalledWith('chat-meta-1');
     expect(observedMetadata).toEqual([
       {
-        [FEISHU_CHAT_ANNOUNCEMENT_METADATA_KEY]: '请使用中文回复',
-        [FEISHU_CHAT_ANNOUNCEMENT_UPDATED_AT_METADATA_KEY]:
-          '2026-04-09T00:00:00.000Z'
+        [CUSTOM_SYSTEM_PROMPT_METADATA_KEY]: '请使用中文回复'
       }
     ]);
-    expect((await bindings.get('chat-meta-1'))?.metadata).toMatchObject({
-      [FEISHU_CHAT_ANNOUNCEMENT_METADATA_KEY]: '请使用中文回复'
-    });
   });
 
-  it('does not refresh metadata again while an existing session continues', async () => {
-    const provider: SessionContextProvider = {
-      getSessionMetadata: vi.fn(async () => ({
-        [FEISHU_CHAT_ANNOUNCEMENT_METADATA_KEY]: '第一次公告'
-      }))
-    };
-    const runtime: AgentRuntime = {
-      async getOrCreateSession(
-        binding: WorkspaceBinding
-      ): Promise<RuntimeSession> {
-        return {
-          ref: {
-            chatId: binding.chatId,
-            workspaceId: binding.workspaceId,
-            sessionId: binding.sessionId
-          },
-          busy: false,
-          async *runTurn(input) {
-            yield {
-              type: 'turn.completed',
-              chatId: input.chatId,
-              turnId: input.turnId,
-              status: 'completed',
-              finalText: 'ok',
-              sessionId: 'session-stable-1',
-              finishedAt: new Date('2026-04-09T00:00:00Z').toISOString()
-            } satisfies BridgeEvent;
-          },
-          async injectUserMessage() {},
-          resolveInteraction() {},
-          abort() {}
-        };
-      },
-      async dropSession(): Promise<void> {}
-    };
-
-    const orchestrator = new BridgeOrchestrator({
-      runtime,
-      approvals: new InMemoryApprovalStore(),
-      bindings: new InMemoryWorkspaceBindingStore(),
-      controls: new InMemoryChatControlStateStore(),
-      shellExecutor: new StubShellExecutor(),
-      transcripts: new InMemoryTranscriptStore(),
-      workspaceRoot: '/tmp/coding-claw-bridge-orchestrator',
-      sessionContextProvider: provider
-    });
-
-    await orchestrator.handleInbound(
-      {
-        channel: 'feishu',
-        chatId: 'chat-meta-2',
-        messageId: 'msg-1',
-        text: 'hello'
-      },
-      createRenderSurface()
-    );
-    await orchestrator.handleInbound(
-      {
-        channel: 'feishu',
-        chatId: 'chat-meta-2',
-        messageId: 'msg-2',
-        text: 'hello again'
-      },
-      createRenderSurface()
-    );
-
-    expect(provider.getSessionMetadata).toHaveBeenCalledTimes(1);
-  });
-
-  it('refreshes metadata again after /new clears the session', async () => {
-    const provider: SessionContextProvider = {
-      getSessionMetadata: vi
-        .fn<SessionContextProvider['getSessionMetadata']>()
-        .mockResolvedValueOnce({
-          [FEISHU_CHAT_ANNOUNCEMENT_METADATA_KEY]: '旧公告'
-        })
-        .mockResolvedValueOnce({
-          [FEISHU_CHAT_ANNOUNCEMENT_METADATA_KEY]: '新公告'
-        })
-    };
+  it('preserves custom system prompt after /new clears the session', async () => {
     const bindings = new InMemoryWorkspaceBindingStore();
     const runtime: AgentRuntime = {
       async getOrCreateSession(
@@ -434,44 +353,41 @@ describe('BridgeOrchestrator', () => {
       controls: new InMemoryChatControlStateStore(),
       shellExecutor: new StubShellExecutor(),
       transcripts: new InMemoryTranscriptStore(),
-      workspaceRoot: '/tmp/coding-claw-bridge-orchestrator',
-      sessionContextProvider: provider
+      workspaceRoot: '/tmp/coding-claw-bridge-orchestrator'
     });
 
-    await orchestrator.handleInbound(
-      {
-        channel: 'feishu',
-        chatId: 'chat-meta-3',
-        messageId: 'msg-1',
-        text: 'hello'
-      },
-      createRenderSurface()
+    await orchestrator.dispatchControlCommand(
+      'chat-meta-3',
+      'reset',
+      JSON.stringify({
+        workspacePath: '/tmp/coding-claw-bridge-orchestrator/chat-meta-3',
+        customSystemPrompt: '先给结论'
+      })
     );
 
     await orchestrator.dispatchControlCommand('chat-meta-3', 'new', '');
 
-    await orchestrator.handleInbound(
-      {
-        channel: 'feishu',
-        chatId: 'chat-meta-3',
-        messageId: 'msg-2',
-        text: 'hello again'
-      },
-      createRenderSurface()
-    );
-
-    expect(provider.getSessionMetadata).toHaveBeenCalledTimes(2);
     expect((await bindings.get('chat-meta-3'))?.metadata).toMatchObject({
-      [FEISHU_CHAT_ANNOUNCEMENT_METADATA_KEY]: '新公告'
+      [CUSTOM_SYSTEM_PROMPT_METADATA_KEY]: '先给结论'
     });
   });
 
-  it('degrades gracefully when metadata refresh fails', async () => {
-    const provider: SessionContextProvider = {
-      getSessionMetadata: vi.fn(async () => {
-        throw new Error('feishu unavailable');
-      })
-    };
+  it('clears custom system prompt when /reset passes an empty value', async () => {
+    const bindings = new InMemoryWorkspaceBindingStore();
+    await bindings.upsert({
+      chatId: 'chat-meta-4',
+      workspaceId: 'chat-meta-4',
+      workspacePath: '/tmp/coding-claw-bridge-orchestrator/chat-meta-4',
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      runtime: 'claude',
+      channel: 'feishu',
+      mode: 'default',
+      metadata: {
+        [CUSTOM_SYSTEM_PROMPT_METADATA_KEY]: '旧提示词'
+      }
+    });
+
     const runtime: AgentRuntime = {
       async getOrCreateSession(
         binding: WorkspaceBinding
@@ -505,39 +421,41 @@ describe('BridgeOrchestrator', () => {
     const orchestrator = new BridgeOrchestrator({
       runtime,
       approvals: new InMemoryApprovalStore(),
-      bindings: new InMemoryWorkspaceBindingStore(),
+      bindings,
       controls: new InMemoryChatControlStateStore(),
       shellExecutor: new StubShellExecutor(),
       transcripts: new InMemoryTranscriptStore(),
-      workspaceRoot: '/tmp/coding-claw-bridge-orchestrator',
-      sessionContextProvider: provider
+      workspaceRoot: '/tmp/coding-claw-bridge-orchestrator'
     });
 
-    await expect(
-      orchestrator.handleInbound(
-        {
-          channel: 'feishu',
-          chatId: 'chat-meta-4',
-          messageId: 'msg-1',
-          text: 'hello'
-        },
-        createRenderSurface()
-      )
-    ).resolves.toBeUndefined();
+    await orchestrator.dispatchControlCommand(
+      'chat-meta-4',
+      'reset',
+      JSON.stringify({
+        workspacePath: '/tmp/coding-claw-bridge-orchestrator/chat-meta-4',
+        customSystemPrompt: ''
+      })
+    );
+
+    expect((await bindings.get('chat-meta-4'))?.metadata).toEqual({});
   });
 
   it('reloads persisted binding sessionId after restart', async () => {
-    const dir = await mkdtemp(join(tmpdir(), 'coding-claw-bridge-persist-'));
-    createdDirs.push(dir);
-    const resolver = new SessionPathResolver(dir);
-    const firstObserved: Array<string | undefined> = [];
-    const secondObserved: Array<string | undefined> = [];
+    const root = await mkdtemp(join(tmpdir(), 'coding-claw-bindings-'));
+    createdDirs.push(root);
+    const resolver = new SessionPathResolver(root);
 
-    const firstRuntime: AgentRuntime = {
+    const approvals = new FileApprovalStore(resolver);
+    const bindings = new FileWorkspaceBindingStore(resolver);
+    const controls = new FileChatControlStateStore(resolver);
+    const transcripts = new FileTranscriptStore(resolver);
+
+    let lastBindingSessionId: string | undefined;
+    const runtime: AgentRuntime = {
       async getOrCreateSession(
         binding: WorkspaceBinding
       ): Promise<RuntimeSession> {
-        firstObserved.push(binding.sessionId);
+        lastBindingSessionId = binding.sessionId;
         return {
           ref: {
             chatId: binding.chatId,
@@ -545,13 +463,6 @@ describe('BridgeOrchestrator', () => {
             sessionId: binding.sessionId
           },
           busy: false,
-          async getStatus() {
-            return {
-              state: 'idle',
-              sessionId: binding.sessionId,
-              supportsContextUsage: false
-            };
-          },
           async *runTurn(input) {
             yield {
               type: 'turn.completed',
@@ -560,7 +471,7 @@ describe('BridgeOrchestrator', () => {
               status: 'completed',
               finalText: 'ok',
               sessionId: 'persisted-session-1',
-              finishedAt: new Date('2026-04-08T00:00:00Z').toISOString()
+              finishedAt: new Date('2026-04-03T00:00:00Z').toISOString()
             } satisfies BridgeEvent;
           },
           async injectUserMessage() {},
@@ -571,17 +482,19 @@ describe('BridgeOrchestrator', () => {
       async dropSession(): Promise<void> {}
     };
 
-    const firstOrchestrator = new BridgeOrchestrator({
-      runtime: firstRuntime,
-      approvals: new FileApprovalStore(resolver),
-      bindings: new FileWorkspaceBindingStore(resolver),
-      controls: new FileChatControlStateStore(resolver),
-      shellExecutor: new StubShellExecutor(),
-      transcripts: new FileTranscriptStore(resolver),
-      workspaceRoot: '/tmp/coding-claw-bridge-orchestrator'
-    });
+    const create = () =>
+      new BridgeOrchestrator({
+        runtime,
+        approvals,
+        bindings,
+        controls,
+        shellExecutor: new StubShellExecutor(),
+        transcripts,
+        workspaceRoot: '/tmp/coding-claw-bridge-orchestrator'
+      });
 
-    await firstOrchestrator.handleInbound(
+    const first = create();
+    await first.handleInbound(
       {
         channel: 'feishu',
         chatId: 'chat-persist',
@@ -590,56 +503,10 @@ describe('BridgeOrchestrator', () => {
       },
       createRenderSurface()
     );
+    expect(lastBindingSessionId).toBeUndefined();
 
-    const secondRuntime: AgentRuntime = {
-      async getOrCreateSession(
-        binding: WorkspaceBinding
-      ): Promise<RuntimeSession> {
-        secondObserved.push(binding.sessionId);
-        return {
-          ref: {
-            chatId: binding.chatId,
-            workspaceId: binding.workspaceId,
-            sessionId: binding.sessionId
-          },
-          busy: false,
-          async getStatus() {
-            return {
-              state: 'idle',
-              sessionId: binding.sessionId,
-              supportsContextUsage: false
-            };
-          },
-          async *runTurn(input) {
-            yield {
-              type: 'turn.completed',
-              chatId: input.chatId,
-              turnId: input.turnId,
-              status: 'completed',
-              finalText: 'ok-2',
-              sessionId: binding.sessionId,
-              finishedAt: new Date('2026-04-08T00:00:01Z').toISOString()
-            } satisfies BridgeEvent;
-          },
-          async injectUserMessage() {},
-          resolveInteraction() {},
-          abort() {}
-        };
-      },
-      async dropSession(): Promise<void> {}
-    };
-
-    const secondOrchestrator = new BridgeOrchestrator({
-      runtime: secondRuntime,
-      approvals: new FileApprovalStore(resolver),
-      bindings: new FileWorkspaceBindingStore(resolver),
-      controls: new FileChatControlStateStore(resolver),
-      shellExecutor: new StubShellExecutor(),
-      transcripts: new FileTranscriptStore(resolver),
-      workspaceRoot: '/tmp/coding-claw-bridge-orchestrator'
-    });
-
-    await secondOrchestrator.handleInbound(
+    const second = create();
+    await second.handleInbound(
       {
         channel: 'feishu',
         chatId: 'chat-persist',
@@ -649,7 +516,6 @@ describe('BridgeOrchestrator', () => {
       createRenderSurface()
     );
 
-    expect(firstObserved).toEqual([undefined]);
-    expect(secondObserved).toEqual(['persisted-session-1']);
+    expect(lastBindingSessionId).toBe('persisted-session-1');
   });
 });

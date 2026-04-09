@@ -3,8 +3,7 @@ import * as lark from '@larksuiteoapi/node-sdk';
 import { randomUUID } from 'node:crypto';
 import {
   COMMAND_REGISTRY,
-  FEISHU_CHAT_ANNOUNCEMENT_METADATA_KEY,
-  FEISHU_CHAT_ANNOUNCEMENT_UPDATED_AT_METADATA_KEY,
+  CUSTOM_SYSTEM_PROMPT_METADATA_KEY,
   errorToLogObject,
   isCrossPlatformAbsolutePath,
   logDebug,
@@ -88,10 +87,6 @@ interface FeishuMessageClient {
   };
 }
 
-interface FeishuAnnouncementClient {
-  request<T = unknown>(request: { method: string; url: string }): Promise<T>;
-}
-
 interface MutableWsClient {
   handleEventData(data: FeishuWsFrame): unknown;
 }
@@ -102,12 +97,6 @@ function asFeishuMessageClient(client: lark.Client): FeishuMessageClient {
 
 function asMutableWsClient(client: lark.WSClient): MutableWsClient {
   return client as unknown as MutableWsClient;
-}
-
-function asFeishuAnnouncementClient(
-  client: lark.Client
-): FeishuAnnouncementClient {
-  return client as unknown as FeishuAnnouncementClient;
 }
 
 export class FeishuChannelAdapter implements SessionContextProvider {
@@ -146,37 +135,8 @@ export class FeishuChannelAdapter implements SessionContextProvider {
   }
 
   async getSessionMetadata(chatId: string): Promise<SessionMetadataPatch> {
-    const announcement = await this.getChatAnnouncement(chatId);
-    return {
-      [FEISHU_CHAT_ANNOUNCEMENT_METADATA_KEY]: announcement,
-      [FEISHU_CHAT_ANNOUNCEMENT_UPDATED_AT_METADATA_KEY]:
-        new Date().toISOString()
-    };
-  }
-
-  private async getChatAnnouncement(
-    chatId: string
-  ): Promise<string | undefined> {
-    const request = {
-      method: 'GET',
-      url: `/open-apis/im/v1/chats/${encodeURIComponent(chatId)}/announcement`
-    };
-
-    try {
-      const client = asFeishuAnnouncementClient(this.client);
-      const response = await callFeishuApi(
-        'im.chat.announcement.get',
-        request,
-        async () => await client.request(request)
-      );
-      return normalizeAnnouncementResponse(response);
-    } catch (error) {
-      logWarn('[feishu] failed to fetch chat announcement', {
-        chatId,
-        error: errorToLogObject(error)
-      });
-      return undefined;
-    }
+    void chatId;
+    return {};
   }
 
   async start(): Promise<void> {
@@ -676,12 +636,18 @@ export class FeishuChannelAdapter implements SessionContextProvider {
     }
 
     if (response.format === 'reset-workspace-picker') {
+      const options: ResetWorkspaceControlOption = {
+        ...response.options,
+        currentCustomSystemPrompt:
+          response.options.currentCustomSystemPrompt ??
+          (await this.getCurrentCustomSystemPrompt(message.chatId))
+      };
       const request = {
         path: { message_id: message.messageId },
         data: {
           msg_type: 'interactive',
           content: JSON.stringify(
-            buildResetWorkspaceControlCard(message.chatId, response.options)
+            buildResetWorkspaceControlCard(message.chatId, options)
           )
         }
       };
@@ -927,6 +893,17 @@ export class FeishuChannelAdapter implements SessionContextProvider {
     }
   }
 
+  private async getCurrentCustomSystemPrompt(chatId: string): Promise<string> {
+    const getBindingSnapshot = (
+      this.orchestrator as Partial<BridgeOrchestrator>
+    ).getBindingSnapshot;
+    if (typeof getBindingSnapshot !== 'function') {
+      return '';
+    }
+    const snapshot = await getBindingSnapshot.call(this.orchestrator, chatId);
+    return snapshot.metadata[CUSTOM_SYSTEM_PROMPT_METADATA_KEY] ?? '';
+  }
+
   private async handleResetWorkspaceCardAction(
     action: Record<string, unknown>,
     formValue: Record<string, unknown>
@@ -949,10 +926,14 @@ export class FeishuChannelAdapter implements SessionContextProvider {
     const resetOptions = {
       defaultWorkspacePath: snapshot.defaultWorkspacePath,
       currentWorkspacePath: snapshot.workspacePath,
-      currentCwd: snapshot.cwd
+      currentCwd: snapshot.cwd,
+      currentCustomSystemPrompt: await this.getCurrentCustomSystemPrompt(chatId)
     } satisfies ResetWorkspaceControlOption;
     const manualWorkspacePath = normalizeFormValue(
       formValue.manual_workspace_path
+    );
+    const customSystemPrompt = normalizeFormValue(
+      formValue.custom_system_prompt
     );
     const workspacePath =
       workspaceSource === 'default'
@@ -1000,7 +981,6 @@ export class FeishuChannelAdapter implements SessionContextProvider {
         }
       };
     }
-
     if (workspaceSource === 'manual' && !isExistingDirectory(workspacePath)) {
       return {
         toast: {
@@ -1020,10 +1000,19 @@ export class FeishuChannelAdapter implements SessionContextProvider {
     }
 
     try {
+      const shouldSendStructuredResetArgs =
+        customSystemPrompt.length > 0 ||
+        resetOptions.currentCustomSystemPrompt.length > 0;
+      const resetArgsText = shouldSendStructuredResetArgs
+        ? JSON.stringify({
+            workspacePath,
+            customSystemPrompt
+          })
+        : workspacePath;
       const response = await this.orchestrator.dispatchControlCommand(
         chatId,
         'reset',
-        workspacePath
+        resetArgsText
       );
       if (response.format !== 'text') {
         return {
@@ -1035,7 +1024,11 @@ export class FeishuChannelAdapter implements SessionContextProvider {
             type: 'raw',
             data: buildResetWorkspaceControlCard(
               chatId,
-              resetOptions,
+              {
+                ...resetOptions,
+                currentCustomSystemPrompt:
+                  customSystemPrompt ?? resetOptions.currentCustomSystemPrompt
+              },
               'reset 结果异常，请重试。',
               true
             )
@@ -1053,7 +1046,9 @@ export class FeishuChannelAdapter implements SessionContextProvider {
           data: buildResetWorkspaceResultCard(
             workspaceSource,
             workspacePath,
-            response.text
+            response.text,
+            false,
+            customSystemPrompt ?? ''
           )
         }
       };
@@ -1073,7 +1068,11 @@ export class FeishuChannelAdapter implements SessionContextProvider {
           type: 'raw',
           data: buildResetWorkspaceControlCard(
             chatId,
-            resetOptions,
+            {
+              ...resetOptions,
+              currentCustomSystemPrompt:
+                customSystemPrompt ?? resetOptions.currentCustomSystemPrompt
+            },
             error instanceof Error ? error.message : String(error),
             true
           )
@@ -1245,58 +1244,6 @@ function isExistingDirectory(path: string): boolean {
   }
 }
 
-function normalizeAnnouncementResponse(payload: unknown): string | undefined {
-  const text = extractAnnouncementText(payload);
-  if (!text) {
-    return undefined;
-  }
-
-  const normalized = text
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter(Boolean)
-    .join('\n')
-    .trim();
-
-  if (!normalized) {
-    return undefined;
-  }
-
-  return normalized.slice(0, 4000);
-}
-
-function extractAnnouncementText(payload: unknown): string {
-  if (!payload || typeof payload !== 'object') {
-    return '';
-  }
-
-  const record = payload as Record<string, unknown>;
-  const data =
-    record.data && typeof record.data === 'object'
-      ? (record.data as Record<string, unknown>)
-      : undefined;
-  const announcement =
-    data?.announcement && typeof data.announcement === 'object'
-      ? (data.announcement as Record<string, unknown>)
-      : undefined;
-
-  const candidates = [
-    announcement?.content,
-    announcement?.text,
-    data?.content,
-    data?.text,
-    record.content,
-    record.text
-  ];
-
-  for (const candidate of candidates) {
-    if (typeof candidate === 'string' && candidate.trim()) {
-      return candidate;
-    }
-  }
-
-  return '';
-}
 function normalizeInboundMessageText(
   messageType: string,
   content:
@@ -1552,8 +1499,21 @@ function buildResetWorkspaceControlCard(
               }
             },
             {
+              tag: 'markdown',
+              content: '自定义系统提示词: 留空则清空当前设置'
+            },
+            {
+              tag: 'textarea',
+              name: 'custom_system_prompt',
+              placeholder: {
+                tag: 'plain_text',
+                content: '例如：请始终用中文回复，请先给结论。'
+              },
+              value: options.currentCustomSystemPrompt
+            },
+            {
               tag: 'button',
-              text: { tag: 'plain_text', content: '使用手动输入路径' },
+              text: { tag: 'plain_text', content: '应用重置设置' },
               type: 'default',
               name: `submit_reset_workspace_${chatId}`,
               action_type: 'form_submit',
@@ -1582,7 +1542,8 @@ function buildResetWorkspaceResultCard(
   workspaceSource: string,
   workspacePath: string,
   detail: string,
-  failed = false
+  failed = false,
+  customSystemPrompt = ''
 ): Record<string, unknown> {
   return {
     schema: '2.0',
@@ -1602,6 +1563,10 @@ function buildResetWorkspaceResultCard(
         {
           tag: 'markdown',
           content: `工作区: \`${workspacePath}\``
+        },
+        {
+          tag: 'markdown',
+          content: `自定义系统提示词: ${customSystemPrompt ? '已设置' : '未设置'}`
         },
         {
           tag: 'markdown',

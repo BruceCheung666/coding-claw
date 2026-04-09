@@ -5,9 +5,7 @@ export type PermissionMode =
   | 'plan'
   | 'dontAsk';
 
-export const FEISHU_CHAT_ANNOUNCEMENT_METADATA_KEY = 'feishu.chatAnnouncement';
-export const FEISHU_CHAT_ANNOUNCEMENT_UPDATED_AT_METADATA_KEY =
-  'feishu.chatAnnouncementUpdatedAt';
+export const CUSTOM_SYSTEM_PROMPT_METADATA_KEY = 'chat.customSystemPrompt';
 
 export type SessionMetadataPatch = Record<string, string | undefined>;
 
@@ -339,6 +337,7 @@ export interface ResetWorkspaceControlOption {
   defaultWorkspacePath: string;
   currentWorkspacePath: string;
   currentCwd: string;
+  currentCustomSystemPrompt: string;
 }
 
 export type ControlResponse =

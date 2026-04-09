@@ -2,6 +2,7 @@ import { dirname, join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
   BridgeOrchestrator,
+  CUSTOM_SYSTEM_PROMPT_METADATA_KEY,
   InMemoryApprovalStore,
   InMemoryChatControlStateStore,
   InMemoryTranscriptStore,
@@ -172,7 +173,9 @@ describe('BridgeOrchestrator control commands', () => {
       channel: 'feishu',
       sessionId: 'session-1',
       mode: 'default',
-      metadata: {}
+      metadata: {
+        [CUSTOM_SYSTEM_PROMPT_METADATA_KEY]: '请先给结论'
+      }
     });
     await controls.upsert({
       chatId: 'chat-1',
@@ -218,7 +221,9 @@ describe('BridgeOrchestrator control commands', () => {
         expect(result.response.options.currentWorkspacePath).toBe(
           '/tmp/chat-1'
         );
-        expect(result.response.options.currentCwd).toBe('/tmp/chat-1/subdir');
+        expect(result.response.options.currentCustomSystemPrompt).toBe(
+          '请先给结论'
+        );
       }
     }
     expect(runtime.dropCalls).toEqual([]);
@@ -383,6 +388,121 @@ describe('BridgeOrchestrator control commands', () => {
     expect((await controls.get('chat-1'))?.shellStatus).toBe('ready');
     expect((await controls.get('chat-1'))?.shellSessionId).toBe('shell-1');
     expect((await shellExecutor.getStatus('chat-1')).sessionId).toBe('shell-1');
+  });
+
+  it('updates custom system prompt through structured /reset payload', async () => {
+    const runtime = new StubRuntime();
+    const approvals = new InMemoryApprovalStore();
+    const controls = new InMemoryChatControlStateStore();
+    const bindings = new InMemoryWorkspaceBindingStore();
+    const shellExecutor = new StubShellExecutor();
+    const transcripts = new InMemoryTranscriptStore();
+
+    await bindings.upsert({
+      chatId: 'chat-1',
+      workspaceId: 'chat-1',
+      workspacePath: '/tmp/chat-1',
+      createdAt: '2026-04-02T00:00:00.000Z',
+      updatedAt: '2026-04-02T00:00:00.000Z',
+      runtime: 'claude',
+      channel: 'feishu',
+      sessionId: 'session-1',
+      mode: 'default',
+      metadata: {}
+    });
+    await controls.upsert({
+      chatId: 'chat-1',
+      inputMode: 'agent',
+      cwd: '/tmp/chat-1/subdir',
+      shellStatus: 'ready',
+      shellSessionId: 'shell-1',
+      createdAt: '2026-04-02T00:00:00.000Z',
+      updatedAt: '2026-04-02T00:00:00.000Z'
+    });
+
+    const orchestrator = new BridgeOrchestrator({
+      runtime,
+      approvals,
+      bindings,
+      controls,
+      shellExecutor,
+      transcripts,
+      workspaceRoot: '/tmp'
+    });
+
+    const result = await orchestrator.dispatchControlCommand(
+      'chat-1',
+      'reset',
+      JSON.stringify({
+        workspacePath: '/tmp/custom-workspace',
+        customSystemPrompt: '请先给结论'
+      })
+    );
+
+    expect(result.format).toBe('text');
+    expect(
+      (await bindings.get('chat-1'))?.metadata[
+        CUSTOM_SYSTEM_PROMPT_METADATA_KEY
+      ]
+    ).toBe('请先给结论');
+  });
+
+  it('preserves custom system prompt through /new', async () => {
+    const runtime = new StubRuntime();
+    const approvals = new InMemoryApprovalStore();
+    const controls = new InMemoryChatControlStateStore();
+    const bindings = new InMemoryWorkspaceBindingStore();
+    const shellExecutor = new StubShellExecutor();
+    const transcripts = new InMemoryTranscriptStore();
+
+    shellExecutor.status = {
+      active: true,
+      running: false,
+      sessionId: 'shell-1',
+      pid: 123
+    };
+
+    await bindings.upsert({
+      chatId: 'chat-1',
+      workspaceId: 'chat-1',
+      workspacePath: '/tmp/chat-1',
+      createdAt: '2026-04-02T00:00:00.000Z',
+      updatedAt: '2026-04-02T00:00:00.000Z',
+      runtime: 'claude',
+      channel: 'feishu',
+      sessionId: 'session-1',
+      mode: 'default',
+      metadata: {
+        [CUSTOM_SYSTEM_PROMPT_METADATA_KEY]: '请先给结论'
+      }
+    });
+    await controls.upsert({
+      chatId: 'chat-1',
+      inputMode: 'agent',
+      cwd: '/tmp/chat-1/subdir',
+      shellStatus: 'ready',
+      shellSessionId: 'shell-1',
+      createdAt: '2026-04-02T00:00:00.000Z',
+      updatedAt: '2026-04-02T00:00:00.000Z'
+    });
+
+    const orchestrator = new BridgeOrchestrator({
+      runtime,
+      approvals,
+      bindings,
+      controls,
+      shellExecutor,
+      transcripts,
+      workspaceRoot: '/tmp'
+    });
+
+    await orchestrator.dispatchControlCommand('chat-1', 'new', '');
+
+    expect(
+      (await bindings.get('chat-1'))?.metadata[
+        CUSTOM_SYSTEM_PROMPT_METADATA_KEY
+      ]
+    ).toBe('请先给结论');
   });
 
   it('rejects extra arguments for /new', async () => {

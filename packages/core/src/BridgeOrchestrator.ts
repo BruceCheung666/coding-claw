@@ -20,6 +20,7 @@ import {
 } from './render/reduceRenderModel.js';
 import { isCrossPlatformAbsolutePath } from './pathUtils.js';
 import { errorToLogObject, logDebug, logError, logWarn } from './logging.js';
+import { CUSTOM_SYSTEM_PROMPT_METADATA_KEY } from './types.js';
 import type {
   AgentModelControlOption,
   AgentModeControlOption,
@@ -32,7 +33,6 @@ import type {
   PendingInteraction,
   PermissionMode,
   SessionContextProvider,
-  SessionMetadataPatch,
   WorkspaceBinding
 } from './types.js';
 
@@ -119,6 +119,10 @@ export class BridgeOrchestrator {
       workspacePath: binding.workspacePath,
       defaultWorkspacePath: this.getDefaultWorkspacePath(chatId)
     };
+  }
+
+  async getBindingSnapshot(chatId: string): Promise<WorkspaceBinding> {
+    return this.getOrCreateBinding(chatId);
   }
 
   getChatExecutionSnapshot(chatId: string): {
@@ -220,7 +224,6 @@ export class BridgeOrchestrator {
     surface: RenderSurface
   ): Promise<void> {
     const binding = await this.getOrCreateBinding(message.chatId);
-    await this.refreshSessionMetadataForNewSession(binding);
     const session = await this.getOrCreateSession(binding);
     const turnId = randomUUID();
     let model = createInitialRenderModel(turnId, message.text);
@@ -327,14 +330,24 @@ export class BridgeOrchestrator {
     binding: WorkspaceBinding,
     control: ChatControlState
   ): Promise<ControlResponse> {
-    const nextWorkspacePath = argsText.trim();
+    const parsed = parseResetArgs(argsText);
+    if (!parsed) {
+      return {
+        format: 'text',
+        text: 'reset 参数格式无效。'
+      };
+    }
+
+    const nextWorkspacePath = parsed.workspacePath.trim();
     if (!nextWorkspacePath) {
       return {
         format: 'reset-workspace-picker',
         options: {
           defaultWorkspacePath: this.getDefaultWorkspacePath(binding.chatId),
           currentWorkspacePath: binding.workspacePath,
-          currentCwd: control.cwd
+          currentCwd: control.cwd,
+          currentCustomSystemPrompt:
+            binding.metadata[CUSTOM_SYSTEM_PROMPT_METADATA_KEY] ?? ''
         }
       };
     }
@@ -348,7 +361,8 @@ export class BridgeOrchestrator {
 
     await this.resetAgentState(binding, control, {
       nextWorkspacePath,
-      resetShell: true
+      resetShell: true,
+      customSystemPrompt: parsed.customSystemPrompt
     });
 
     return {
@@ -356,7 +370,8 @@ export class BridgeOrchestrator {
       text: [
         '已重置 workspace、shell 与会话。',
         `cwd: ${control.cwd}`,
-        `workspace: ${binding.workspacePath}`
+        `workspace: ${binding.workspacePath}`,
+        `system prompt: ${binding.metadata[CUSTOM_SYSTEM_PROMPT_METADATA_KEY] ? '已设置' : '未设置'}`
       ].join('\n')
     };
   }
@@ -615,6 +630,7 @@ export class BridgeOrchestrator {
       resetShell: boolean;
       nextModel?: string;
       clearModelOverride?: boolean;
+      customSystemPrompt?: string;
     }
   ): Promise<void> {
     await this.deps.runtime.dropSession(binding.chatId);
@@ -629,6 +645,14 @@ export class BridgeOrchestrator {
     binding.model = options.clearModelOverride
       ? undefined
       : (options.nextModel ?? binding.model);
+    if (typeof options.customSystemPrompt !== 'undefined') {
+      const normalizedPrompt = options.customSystemPrompt.trim();
+      if (normalizedPrompt) {
+        binding.metadata[CUSTOM_SYSTEM_PROMPT_METADATA_KEY] = normalizedPrompt;
+      } else {
+        delete binding.metadata[CUSTOM_SYSTEM_PROMPT_METADATA_KEY];
+      }
+    }
     binding.updatedAt = now;
     mkdirSync(binding.workspacePath, { recursive: true });
     await this.deps.bindings.upsert(binding);
@@ -647,35 +671,6 @@ export class BridgeOrchestrator {
     control.updatedAt = now;
     await this.deps.controls.upsert(control);
   }
-
-  private async refreshSessionMetadataForNewSession(
-    binding: WorkspaceBinding
-  ): Promise<void> {
-    if (binding.sessionId || this.sessions.has(binding.chatId)) {
-      return;
-    }
-
-    const provider = this.deps.sessionContextProvider;
-    if (!provider) {
-      return;
-    }
-
-    try {
-      const patch = await provider.getSessionMetadata(binding.chatId);
-      if (!applySessionMetadataPatch(binding, patch)) {
-        return;
-      }
-
-      binding.updatedAt = new Date().toISOString();
-      await this.deps.bindings.upsert(binding);
-    } catch (error) {
-      logWarn('[bridge] failed to refresh session metadata', {
-        chatId: binding.chatId,
-        error: errorToLogObject(error)
-      });
-    }
-  }
-
   private async persistAndRender(
     event: BridgeEvent,
     surface: RenderSurface,
@@ -945,24 +940,34 @@ function formatContextUsage(
   return `${ratio} (${total}/${max})`;
 }
 
-function applySessionMetadataPatch(
-  binding: WorkspaceBinding,
-  patch: SessionMetadataPatch
-): boolean {
-  let changed = false;
-  for (const [key, value] of Object.entries(patch)) {
-    if (value === undefined) {
-      if (key in binding.metadata) {
-        delete binding.metadata[key];
-        changed = true;
-      }
-      continue;
-    }
-
-    if (binding.metadata[key] !== value) {
-      binding.metadata[key] = value;
-      changed = true;
-    }
+function parseResetArgs(
+  argsText: string
+): { workspacePath: string; customSystemPrompt?: string } | null {
+  const trimmed = argsText.trim();
+  if (!trimmed) {
+    return { workspacePath: '' };
   }
-  return changed;
+
+  if (!trimmed.startsWith('{')) {
+    return {
+      workspacePath: trimmed
+    };
+  }
+
+  try {
+    const parsed = JSON.parse(trimmed) as {
+      workspacePath?: unknown;
+      customSystemPrompt?: unknown;
+    };
+    return {
+      workspacePath:
+        typeof parsed.workspacePath === 'string' ? parsed.workspacePath : '',
+      customSystemPrompt:
+        typeof parsed.customSystemPrompt === 'string'
+          ? parsed.customSystemPrompt
+          : undefined
+    };
+  } catch {
+    return null;
+  }
 }
