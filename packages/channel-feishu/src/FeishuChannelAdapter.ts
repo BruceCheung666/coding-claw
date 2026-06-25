@@ -1192,6 +1192,11 @@ export class FeishuChannelAdapter implements SessionContextProvider {
 
   private toInboundMessage(payload: unknown): InboundChatMessage | undefined {
     const event = payload as {
+      sender?: {
+        sender_id?: {
+          open_id?: string;
+        };
+      };
       message?: {
         chat_id?: string;
         message_id?: string;
@@ -1212,6 +1217,8 @@ export class FeishuChannelAdapter implements SessionContextProvider {
       return undefined;
     }
 
+    const senderId = event.sender?.sender_id?.open_id;
+
     try {
       const rawContent = JSON.parse(message.content ?? '{}') as
         | { text?: string }
@@ -1228,7 +1235,8 @@ export class FeishuChannelAdapter implements SessionContextProvider {
         channel: 'feishu',
         chatId,
         messageId,
-        text
+        text,
+        senderId
       };
     } catch {
       return undefined;

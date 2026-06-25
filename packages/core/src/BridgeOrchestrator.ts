@@ -20,7 +20,7 @@ import {
 } from './render/reduceRenderModel.js';
 import { isCrossPlatformAbsolutePath } from './pathUtils.js';
 import { errorToLogObject, logDebug, logError, logWarn } from './logging.js';
-import { CUSTOM_SYSTEM_PROMPT_METADATA_KEY } from './types.js';
+import { CUSTOM_SYSTEM_PROMPT_METADATA_KEY, SAFE_MODE_METADATA_KEY, OWNER_ID_METADATA_KEY } from './types.js';
 import type {
   AgentModelControlOption,
   AgentModeControlOption,
@@ -83,7 +83,8 @@ export class BridgeOrchestrator {
     const response = await this.dispatchControlCommand(
       message.chatId,
       parsed.match.id,
-      parsed.match.argsText
+      parsed.match.argsText,
+      message.senderId
     );
     return {
       kind: 'control',
@@ -94,14 +95,29 @@ export class BridgeOrchestrator {
   async dispatchControlCommand(
     chatId: string,
     commandId: CommandId,
-    argsText: string
+    argsText: string,
+    senderId?: string
   ): Promise<ControlResponse> {
     const binding = await this.getOrCreateBinding(chatId);
     const control = await this.getOrCreateControlState(
       chatId,
       binding.workspacePath
     );
-    return this.executeControlCommand(commandId, argsText, binding, control);
+
+    const SAFE_MODE_ALLOWED_COMMANDS: CommandId[] = ['new', 'help', 'safe'];
+    const safeModeOn = binding.metadata[SAFE_MODE_METADATA_KEY] === 'on';
+    const ownerId = binding.metadata[OWNER_ID_METADATA_KEY];
+
+    if (safeModeOn && senderId && ownerId && senderId !== ownerId) {
+      if (!SAFE_MODE_ALLOWED_COMMANDS.includes(commandId)) {
+        return {
+          format: 'text',
+          text: '当前处于安全模式，仅群主可执行此命令。你可以使用 /new 或 /help。'
+        };
+      }
+    }
+
+    return this.executeControlCommand(commandId, argsText, binding, control, senderId);
   }
 
   async getChatControlSnapshot(chatId: string): Promise<{
@@ -298,7 +314,8 @@ export class BridgeOrchestrator {
     commandId: CommandId,
     argsText: string,
     binding: WorkspaceBinding,
-    control: ChatControlState
+    control: ChatControlState,
+    senderId?: string
   ): Promise<ControlResponse> {
     switch (commandId) {
       case 'agent.mode':
@@ -308,7 +325,7 @@ export class BridgeOrchestrator {
       case 'agent.status':
         return this.handleAgentStatus(binding, control);
       case 'reset':
-        return this.handleReset(argsText, binding, control);
+        return this.handleReset(argsText, binding, control, senderId);
       case 'new':
         return this.handleNewSession(argsText, binding, control);
       case 'shell.exec':
@@ -322,13 +339,16 @@ export class BridgeOrchestrator {
           format: 'text',
           text: buildHelpText()
         };
+      case 'safe':
+        return this.handleSafeMode(argsText, binding, senderId);
     }
   }
 
   private async handleReset(
     argsText: string,
     binding: WorkspaceBinding,
-    control: ChatControlState
+    control: ChatControlState,
+    senderId?: string
   ): Promise<ControlResponse> {
     const parsed = parseResetArgs(argsText);
     if (!parsed) {
@@ -364,6 +384,12 @@ export class BridgeOrchestrator {
       resetShell: true,
       customSystemPrompt: parsed.customSystemPrompt
     });
+
+    if (senderId && !binding.metadata[OWNER_ID_METADATA_KEY]) {
+      binding.metadata[OWNER_ID_METADATA_KEY] = senderId;
+      binding.updatedAt = new Date().toISOString();
+      await this.deps.bindings.upsert(binding);
+    }
 
     return {
       format: 'text',
@@ -622,6 +648,63 @@ export class BridgeOrchestrator {
     return this.handleChatStatus(binding, control);
   }
 
+  private async handleSafeMode(
+    argsText: string,
+    binding: WorkspaceBinding,
+    senderId?: string
+  ): Promise<ControlResponse> {
+    const ownerId = binding.metadata[OWNER_ID_METADATA_KEY];
+    const currentSafeMode = binding.metadata[SAFE_MODE_METADATA_KEY] === 'on';
+    const arg = argsText.trim().toLowerCase();
+
+    if (!arg) {
+      return {
+        format: 'text',
+        text: [
+          `安全模式: ${currentSafeMode ? '已开启' : '已关闭'}`,
+          `群主: ${ownerId ?? '(未设置)'}`
+        ].join('\n')
+      };
+    }
+
+    if (arg !== 'on' && arg !== 'off') {
+      return {
+        format: 'text',
+        text: '用法: /safe [on|off]'
+      };
+    }
+
+    if (ownerId && senderId && senderId !== ownerId) {
+      return {
+        format: 'text',
+        text: '仅群主可切换安全模式。'
+      };
+    }
+
+    if (arg === 'on') {
+      if (!senderId) {
+        return {
+          format: 'text',
+          text: '无法识别操作者身份，无法开启安全模式。'
+        };
+      }
+      binding.metadata[SAFE_MODE_METADATA_KEY] = 'on';
+      if (!ownerId) {
+        binding.metadata[OWNER_ID_METADATA_KEY] = senderId;
+      }
+    } else {
+      delete binding.metadata[SAFE_MODE_METADATA_KEY];
+    }
+
+    binding.updatedAt = new Date().toISOString();
+    await this.deps.bindings.upsert(binding);
+
+    return {
+      format: 'text',
+      text: `安全模式已${arg === 'on' ? '开启' : '关闭'}。`
+    };
+  }
+
   private async resetAgentState(
     binding: WorkspaceBinding,
     control: ChatControlState,
@@ -840,28 +923,28 @@ function buildAgentModelOptions(): AgentModelControlOption[] {
       description: '使用 Claude Code 默认 best 档位。'
     },
     {
-      model: 'sonnet',
-      label: 'sonnet',
+      model: 'claude-sonnet-4-6',
+      label: 'claude-sonnet-4-6',
       description: 'claude-sonnet-4-6'
     },
     {
-      model: 'opus',
-      label: 'opus',
+      model: 'claude-opus-4-6',
+      label: 'claude-opus-4-6',
       description: 'claude-opus-4-6'
     },
     {
-      model: 'haiku',
-      label: 'haiku',
+      model: 'claude-haiku-4-5-20251001',
+      label: 'claude-haiku-4-5-20251001',
       description: 'claude-haiku-4-5-20251001'
     },
     {
-      model: 'sonnet[1m]',
-      label: 'sonnet[1m]',
+      model: 'claude-sonnet-4-6[1m]',
+      label: 'claude-sonnet-4-6[1m]',
       description: 'claude-sonnet-4-6'
     },
     {
-      model: 'opus[1m]',
-      label: 'opus[1m]',
+      model: 'claude-opus-4-6[1m]',
+      label: 'claude-opus-4-6[1m]',
       description: 'claude-opus-4-6'
     },
     {
@@ -912,20 +995,8 @@ function resolveAgentModelInput(
     return 'default';
   }
 
-  if (normalized === 'claude-sonnet-4-6' || normalized === 'claude-opus-4-6') {
-    return normalized;
-  }
-
-  if (options.some((option) => option.model === normalized)) {
-    return normalized;
-  }
-
-  const customModel = process.env.ANTHROPIC_CUSTOM_MODEL_OPTION?.trim();
-  if (customModel === normalized) {
-    return normalized;
-  }
-
-  return undefined;
+  // 接受任意模型 ID，不再限制为预定义列表
+  return normalized;
 }
 
 function formatContextUsage(

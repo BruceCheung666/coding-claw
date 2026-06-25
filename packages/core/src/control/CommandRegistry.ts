@@ -7,7 +7,8 @@ export type CommandId =
   | 'shell.exec'
   | 'shell.status'
   | 'chat.status'
-  | 'help';
+  | 'help'
+  | 'safe';
 
 export interface CommandDefinition {
   id: CommandId;
@@ -102,6 +103,13 @@ export const COMMAND_REGISTRY: CommandDefinition[] = [
     aliases: ['h'],
     description: '查看 bridge 命令帮助。',
     usage: '/help | /h'
+  },
+  {
+    id: 'safe',
+    canonicalTokens: ['safe'],
+    aliases: [],
+    description: '查看或切换安全模式。开启后仅群主可执行大多数命令。',
+    usage: '/safe [on|off]'
   }
 ];
 

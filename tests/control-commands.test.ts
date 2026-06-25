@@ -3,6 +3,8 @@ import { describe, expect, it } from 'vitest';
 import {
   BridgeOrchestrator,
   CUSTOM_SYSTEM_PROMPT_METADATA_KEY,
+  SAFE_MODE_METADATA_KEY,
+  OWNER_ID_METADATA_KEY,
   InMemoryApprovalStore,
   InMemoryChatControlStateStore,
   InMemoryTranscriptStore,
@@ -574,32 +576,32 @@ describe('BridgeOrchestrator control commands', () => {
         expect(result.response.options.map((option) => option.model)).toEqual([
           'default',
           'best',
-          'sonnet',
-          'opus',
-          'haiku',
-          'sonnet[1m]',
-          'opus[1m]',
+          'claude-sonnet-4-6',
+          'claude-opus-4-6',
+          'claude-haiku-4-5-20251001',
+          'claude-sonnet-4-6[1m]',
+          'claude-opus-4-6[1m]',
           'opusplan'
         ]);
         expect(
-          result.response.options.find((option) => option.model === 'sonnet')
+          result.response.options.find((option) => option.model === 'claude-sonnet-4-6')
             ?.description
         ).toContain('claude-sonnet-4-6');
         expect(
-          result.response.options.find((option) => option.model === 'opus')
+          result.response.options.find((option) => option.model === 'claude-opus-4-6')
             ?.description
         ).toContain('claude-opus-4-6');
         expect(
-          result.response.options.find((option) => option.model === 'haiku')
+          result.response.options.find((option) => option.model === 'claude-haiku-4-5-20251001')
             ?.description
         ).toContain('claude-haiku-4-5-20251001');
         expect(
           result.response.options.find(
-            (option) => option.model === 'sonnet[1m]'
+            (option) => option.model === 'claude-sonnet-4-6[1m]'
           )?.description
         ).toContain('claude-sonnet-4-6');
         expect(
-          result.response.options.find((option) => option.model === 'opus[1m]')
+          result.response.options.find((option) => option.model === 'claude-opus-4-6[1m]')
             ?.description
         ).toContain('claude-opus-4-6');
       }
@@ -1008,6 +1010,263 @@ describe('BridgeOrchestrator control commands', () => {
     ]);
     if (result.kind === 'control') {
       expect(result.response.text).toContain('$ vim README.md');
+    }
+  });
+});
+
+describe('safe mode', () => {
+  function createOrchestrator(options?: {
+    bindings?: InMemoryWorkspaceBindingStore;
+  }) {
+    const runtime = new StubRuntime();
+    const bindings = options?.bindings ?? new InMemoryWorkspaceBindingStore();
+    const orchestrator = new BridgeOrchestrator({
+      runtime,
+      approvals: new InMemoryApprovalStore(),
+      bindings,
+      controls: new InMemoryChatControlStateStore(),
+      shellExecutor: new StubShellExecutor(),
+      transcripts: new InMemoryTranscriptStore(),
+      workspaceRoot: '/tmp'
+    });
+    return { orchestrator, bindings };
+  }
+
+  it('shows safe mode status as off by default', async () => {
+    const { orchestrator } = createOrchestrator();
+    const result = await orchestrator.dispatchControlCommand('chat-1', 'safe', '');
+    expect(result.format).toBe('text');
+    if (result.format === 'text') {
+      expect(result.text).toContain('安全模式: 已关闭');
+      expect(result.text).toContain('群主: (未设置)');
+    }
+  });
+
+  it('enables safe mode and sets owner via /safe on', async () => {
+    const { orchestrator, bindings } = createOrchestrator();
+    const result = await orchestrator.dispatchControlCommand('chat-1', 'safe', 'on', 'owner-1');
+    expect(result.format).toBe('text');
+    if (result.format === 'text') {
+      expect(result.text).toContain('安全模式已开启');
+    }
+    const binding = await bindings.get('chat-1');
+    expect(binding?.metadata[SAFE_MODE_METADATA_KEY]).toBe('on');
+    expect(binding?.metadata[OWNER_ID_METADATA_KEY]).toBe('owner-1');
+  });
+
+  it('disables safe mode via /safe off', async () => {
+    const bindings = new InMemoryWorkspaceBindingStore();
+    await bindings.upsert({
+      chatId: 'chat-1',
+      workspaceId: 'chat-1',
+      workspacePath: '/tmp/chat-1',
+      createdAt: '2026-04-02T00:00:00.000Z',
+      updatedAt: '2026-04-02T00:00:00.000Z',
+      runtime: 'claude',
+      channel: 'feishu',
+      mode: 'default',
+      metadata: {
+        [SAFE_MODE_METADATA_KEY]: 'on',
+        [OWNER_ID_METADATA_KEY]: 'owner-1'
+      }
+    });
+    const { orchestrator } = createOrchestrator({ bindings });
+    const result = await orchestrator.dispatchControlCommand('chat-1', 'safe', 'off', 'owner-1');
+    expect(result.format).toBe('text');
+    if (result.format === 'text') {
+      expect(result.text).toContain('安全模式已关闭');
+    }
+    const binding = await bindings.get('chat-1');
+    expect(binding?.metadata[SAFE_MODE_METADATA_KEY]).toBeUndefined();
+  });
+
+  it('rejects non-owner from toggling safe mode', async () => {
+    const bindings = new InMemoryWorkspaceBindingStore();
+    await bindings.upsert({
+      chatId: 'chat-1',
+      workspaceId: 'chat-1',
+      workspacePath: '/tmp/chat-1',
+      createdAt: '2026-04-02T00:00:00.000Z',
+      updatedAt: '2026-04-02T00:00:00.000Z',
+      runtime: 'claude',
+      channel: 'feishu',
+      mode: 'default',
+      metadata: {
+        [SAFE_MODE_METADATA_KEY]: 'on',
+        [OWNER_ID_METADATA_KEY]: 'owner-1'
+      }
+    });
+    const { orchestrator } = createOrchestrator({ bindings });
+    const result = await orchestrator.dispatchControlCommand('chat-1', 'safe', 'off', 'member-1');
+    expect(result.format).toBe('text');
+    if (result.format === 'text') {
+      expect(result.text).toContain('仅群主可切换安全模式');
+    }
+    expect((await bindings.get('chat-1'))?.metadata[SAFE_MODE_METADATA_KEY]).toBe('on');
+  });
+
+  it('blocks non-owner from restricted commands in safe mode', async () => {
+    const bindings = new InMemoryWorkspaceBindingStore();
+    await bindings.upsert({
+      chatId: 'chat-1',
+      workspaceId: 'chat-1',
+      workspacePath: '/tmp/chat-1',
+      createdAt: '2026-04-02T00:00:00.000Z',
+      updatedAt: '2026-04-02T00:00:00.000Z',
+      runtime: 'claude',
+      channel: 'feishu',
+      mode: 'default',
+      metadata: {
+        [SAFE_MODE_METADATA_KEY]: 'on',
+        [OWNER_ID_METADATA_KEY]: 'owner-1'
+      }
+    });
+    const { orchestrator } = createOrchestrator({ bindings });
+
+    for (const commandId of ['reset', 'agent.mode', 'shell.exec', 'agent.model', 'shell.status', 'chat.status', 'agent.status'] as const) {
+      const result = await orchestrator.dispatchControlCommand('chat-1', commandId, '', 'member-1');
+      expect(result.format).toBe('text');
+      if (result.format === 'text') {
+        expect(result.text).toContain('当前处于安全模式');
+      }
+    }
+  });
+
+  it('allows non-owner to use /new and /help in safe mode', async () => {
+    const bindings = new InMemoryWorkspaceBindingStore();
+    await bindings.upsert({
+      chatId: 'chat-1',
+      workspaceId: 'chat-1',
+      workspacePath: '/tmp/chat-1',
+      createdAt: '2026-04-02T00:00:00.000Z',
+      updatedAt: '2026-04-02T00:00:00.000Z',
+      runtime: 'claude',
+      channel: 'feishu',
+      mode: 'default',
+      metadata: {
+        [SAFE_MODE_METADATA_KEY]: 'on',
+        [OWNER_ID_METADATA_KEY]: 'owner-1'
+      }
+    });
+    const { orchestrator } = createOrchestrator({ bindings });
+
+    const newResult = await orchestrator.dispatchControlCommand('chat-1', 'new', '', 'member-1');
+    expect(newResult.format).toBe('text');
+    if (newResult.format === 'text') {
+      expect(newResult.text).toContain('已开启新会话');
+    }
+
+    const helpResult = await orchestrator.dispatchControlCommand('chat-1', 'help', '', 'member-1');
+    expect(helpResult.format).toBe('text');
+    if (helpResult.format === 'text') {
+      expect(helpResult.text).toContain('Bridge Commands');
+    }
+  });
+
+  it('allows owner to use all commands in safe mode', async () => {
+    const bindings = new InMemoryWorkspaceBindingStore();
+    await bindings.upsert({
+      chatId: 'chat-1',
+      workspaceId: 'chat-1',
+      workspacePath: '/tmp/chat-1',
+      createdAt: '2026-04-02T00:00:00.000Z',
+      updatedAt: '2026-04-02T00:00:00.000Z',
+      runtime: 'claude',
+      channel: 'feishu',
+      mode: 'default',
+      metadata: {
+        [SAFE_MODE_METADATA_KEY]: 'on',
+        [OWNER_ID_METADATA_KEY]: 'owner-1'
+      }
+    });
+    const { orchestrator } = createOrchestrator({ bindings });
+
+    const result = await orchestrator.dispatchControlCommand('chat-1', 'agent.mode', '', 'owner-1');
+    expect(result.format).toBe('agent-mode-picker');
+  });
+
+  it('skips safe mode check when senderId is absent (backward compat)', async () => {
+    const bindings = new InMemoryWorkspaceBindingStore();
+    await bindings.upsert({
+      chatId: 'chat-1',
+      workspaceId: 'chat-1',
+      workspacePath: '/tmp/chat-1',
+      createdAt: '2026-04-02T00:00:00.000Z',
+      updatedAt: '2026-04-02T00:00:00.000Z',
+      runtime: 'claude',
+      channel: 'feishu',
+      mode: 'default',
+      metadata: {
+        [SAFE_MODE_METADATA_KEY]: 'on',
+        [OWNER_ID_METADATA_KEY]: 'owner-1'
+      }
+    });
+    const { orchestrator } = createOrchestrator({ bindings });
+
+    const result = await orchestrator.dispatchControlCommand('chat-1', 'agent.mode', '');
+    expect(result.format).toBe('agent-mode-picker');
+  });
+
+  it('rejects /safe on when senderId is absent', async () => {
+    const { orchestrator } = createOrchestrator();
+    const result = await orchestrator.dispatchControlCommand('chat-1', 'safe', 'on');
+    expect(result.format).toBe('text');
+    if (result.format === 'text') {
+      expect(result.text).toContain('无法识别操作者身份');
+    }
+  });
+
+  it('sets owner on /reset when no owner exists', async () => {
+    const bindings = new InMemoryWorkspaceBindingStore();
+    await bindings.upsert({
+      chatId: 'chat-1',
+      workspaceId: 'chat-1',
+      workspacePath: '/tmp/chat-1',
+      createdAt: '2026-04-02T00:00:00.000Z',
+      updatedAt: '2026-04-02T00:00:00.000Z',
+      runtime: 'claude',
+      channel: 'feishu',
+      mode: 'default',
+      metadata: {}
+    });
+    const { orchestrator } = createOrchestrator({ bindings });
+
+    await orchestrator.dispatchControlCommand('chat-1', 'reset', '/tmp/new-workspace', 'owner-1');
+    expect((await bindings.get('chat-1'))?.metadata[OWNER_ID_METADATA_KEY]).toBe('owner-1');
+  });
+
+  it('dispatches senderId from dispatchInbound', async () => {
+    const bindings = new InMemoryWorkspaceBindingStore();
+    await bindings.upsert({
+      chatId: 'chat-1',
+      workspaceId: 'chat-1',
+      workspacePath: '/tmp/chat-1',
+      createdAt: '2026-04-02T00:00:00.000Z',
+      updatedAt: '2026-04-02T00:00:00.000Z',
+      runtime: 'claude',
+      channel: 'feishu',
+      mode: 'default',
+      metadata: {
+        [SAFE_MODE_METADATA_KEY]: 'on',
+        [OWNER_ID_METADATA_KEY]: 'owner-1'
+      }
+    });
+    const { orchestrator } = createOrchestrator({ bindings });
+
+    const result = await orchestrator.dispatchInbound({
+      channel: 'feishu',
+      chatId: 'chat-1',
+      messageId: 'msg-1',
+      text: '/reset',
+      senderId: 'member-1'
+    });
+
+    expect(result.kind).toBe('control');
+    if (result.kind === 'control') {
+      expect(result.response.format).toBe('text');
+      if (result.response.format === 'text') {
+        expect(result.response.text).toContain('当前处于安全模式');
+      }
     }
   });
 });

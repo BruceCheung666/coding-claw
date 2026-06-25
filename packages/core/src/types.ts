@@ -6,6 +6,8 @@ export type PermissionMode =
   | 'dontAsk';
 
 export const CUSTOM_SYSTEM_PROMPT_METADATA_KEY = 'chat.customSystemPrompt';
+export const SAFE_MODE_METADATA_KEY = 'chat.safeMode';
+export const OWNER_ID_METADATA_KEY = 'chat.ownerId';
 
 export type SessionMetadataPatch = Record<string, string | undefined>;
 
@@ -319,6 +321,7 @@ export interface InboundChatMessage {
   messageId: string;
   text: string;
   mentions?: string[];
+  senderId?: string;
 }
 
 export interface AgentModeControlOption {

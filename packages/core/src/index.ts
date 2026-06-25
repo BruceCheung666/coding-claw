@@ -1,7 +1,11 @@
 export type * from './types.js';
 export type * from './contracts.js';
 
-export { CUSTOM_SYSTEM_PROMPT_METADATA_KEY } from './types.js';
+export {
+  CUSTOM_SYSTEM_PROMPT_METADATA_KEY,
+  SAFE_MODE_METADATA_KEY,
+  OWNER_ID_METADATA_KEY
+} from './types.js';
 export type { SessionContextProvider, SessionMetadataPatch } from './types.js';
 
 export { BridgeOrchestrator } from './BridgeOrchestrator.js';

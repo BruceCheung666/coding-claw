@@ -1309,7 +1309,7 @@ describe('FeishuChannelAdapter', () => {
         value: {
           action: 'set-agent-model',
           chat_id: 'chat-1',
-          model: 'sonnet[1m]'
+          model: 'claude-sonnet-4-6[1m]'
         }
       }
     });
@@ -1317,13 +1317,13 @@ describe('FeishuChannelAdapter', () => {
     expect(orchestrator.dispatchControlCommand).toHaveBeenCalledWith(
       'chat-1',
       'agent.model',
-      'sonnet[1m]'
+      'claude-sonnet-4-6[1m]'
     );
     expect(response.toast.content).toBe('模型已切换');
     expect(response.card.data.header.template).toBe('green');
     expect(response.card.data.header.title.content).toBe('✅ Agent 模型已切换');
     expect(JSON.stringify(response.card.data)).toContain(
-      'Agent 模型已切换为 **sonnet[1m]**'
+      'Agent 模型已切换为 **claude-sonnet-4-6[1m]**'
     );
     expect(JSON.stringify(response.card.data)).toContain('会话已重置');
     expect(JSON.stringify(response.card.data)).not.toContain('session: reset');
@@ -2568,17 +2568,17 @@ describe('FeishuChannelAdapter', () => {
           options: [
             { model: 'default', label: 'default', description: '默认模型' },
             { model: 'best', label: 'best', description: '最强可用模型' },
-            { model: 'sonnet', label: 'sonnet', description: '通用主力 alias' },
-            { model: 'opus', label: 'opus', description: '更强推理 alias' },
-            { model: 'haiku', label: 'haiku', description: '更快更轻量 alias' },
+            { model: 'claude-sonnet-4-6', label: 'claude-sonnet-4-6', description: '通用主力 alias' },
+            { model: 'claude-opus-4-6', label: 'claude-opus-4-6', description: '更强推理 alias' },
+            { model: 'claude-haiku-4-5-20251001', label: 'claude-haiku-4-5-20251001', description: '更快更轻量 alias' },
             {
-              model: 'sonnet[1m]',
-              label: 'sonnet[1m]',
+              model: 'claude-sonnet-4-6[1m]',
+              label: 'claude-sonnet-4-6[1m]',
               description: '1M 上下文 Sonnet'
             },
             {
-              model: 'opus[1m]',
-              label: 'opus[1m]',
+              model: 'claude-opus-4-6[1m]',
+              label: 'claude-opus-4-6[1m]',
               description: '1M 上下文 Opus'
             },
             {
@@ -2632,7 +2632,7 @@ describe('FeishuChannelAdapter', () => {
       client.im.message.reply.mock.calls[0]![0].data.content
     ) as Record<string, unknown>;
     expect(JSON.stringify(card)).toContain('当前模型: **claude-sonnet-4-6**');
-    expect(JSON.stringify(card)).toContain('sonnet[1m]');
+    expect(JSON.stringify(card)).toContain('claude-sonnet-4-6[1m]');
     expect(JSON.stringify(card)).toContain('set-agent-model');
     expect(markCompleted).toHaveBeenCalledWith('om_model');
     expect(markFailed).not.toHaveBeenCalled();
@@ -2905,7 +2905,7 @@ describe('FeishuChannelAdapter', () => {
         value: {
           action: 'set-agent-model',
           chat_id: 'chat-1',
-          model: 'sonnet[1m]'
+          model: 'claude-sonnet-4-6[1m]'
         }
       }
     });
@@ -2913,13 +2913,13 @@ describe('FeishuChannelAdapter', () => {
     expect(orchestrator.dispatchControlCommand).toHaveBeenCalledWith(
       'chat-1',
       'agent.model',
-      'sonnet[1m]'
+      'claude-sonnet-4-6[1m]'
     );
     expect(response.toast.content).toBe('模型已切换');
     expect(response.card.data.header.template).toBe('green');
     expect(response.card.data.header.title.content).toBe('✅ Agent 模型已切换');
     expect(JSON.stringify(response.card.data)).toContain(
-      'Agent 模型已切换为 **sonnet[1m]**'
+      'Agent 模型已切换为 **claude-sonnet-4-6[1m]**'
     );
     expect(JSON.stringify(response.card.data)).toContain('会话已重置');
     expect(JSON.stringify(response.card.data)).not.toContain('session: reset');
